@@ -1,0 +1,238 @@
+name: Release Desktop App (Tauri)
+
+# Issue / Feature — Tauri 기반 크로스 플랫폼 데스크톱 설치파일 릴리즈 파이프라인
+# 4 플랫폼 (Windows x86_64, macOS Apple Silicon / Intel, Linux x86_64) matrix 빌드
+# release tag (v*) push 시 자동 트리거 + workflow_dispatch 수동 테스트 실행
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name (test build if not starting with v)'
+        required: false
+        default: 'test'
+
+permissions:
+  contents: write  # release 자산 첨부 권한
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            os: windows
+            arch: x86_64
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            os: macos
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            os: macos
+            arch: x86_64
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            os: linux
+            arch: x86_64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Determine version tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          SEMVER="${TAG#v}"
+          if [[ "$SEMVER" =~ ^[0-9]+\.[0-9]+ ]]; then
+            echo "semver=${SEMVER}" >> $GITHUB_OUTPUT
+          else
+            echo "semver=0.2.0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Linux system dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Ensure Rust target is installed
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            rhwp-desk/target
+          key: ${{ matrix.target }}-desk-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-desk-
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@v1.10.2
+
+      - name: Install Tauri CLI
+        run: cargo binstall --no-confirm tauri-cli@^2 || cargo install tauri-cli --version ^2.0.0 --locked
+
+      - name: Build rhwp core CLI binary
+        run: cargo build --release --bin rhwp --target ${{ matrix.target }}
+
+      - name: Strip rhwp binary (Linux/macOS)
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          RHWP_BIN="target/${{ matrix.target }}/release/rhwp"
+          if command -v strip >/dev/null 2>&1; then
+            strip "$RHWP_BIN" || true
+          fi
+          ls -lh "$RHWP_BIN"
+
+      - name: Stage rhwp binary into rhwp-desk/bin (Linux/macOS)
+        if: matrix.os != 'windows'
+        shell: bash
+        run: |
+          mkdir -p rhwp-desk/bin
+          cp target/${{ matrix.target }}/release/rhwp rhwp-desk/bin/rhwp
+          chmod +x rhwp-desk/bin/rhwp
+
+      - name: Stage rhwp binary into rhwp-desk/bin (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path rhwp-desk/bin | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/rhwp.exe" rhwp-desk/bin/rhwp.exe
+          Get-Item rhwp-desk/bin/rhwp.exe | Select-Object Name, Length
+
+      - name: Build Tauri Desktop App (Linux/macOS)
+        if: matrix.os != 'windows'
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          cd rhwp-desk
+          cargo tauri build --target ${{ matrix.target }} --config "{\"version\": \"${{ steps.version.outputs.semver }}\"}"
+
+      - name: Build Tauri Desktop App (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          cd rhwp-desk
+          cargo tauri build --target ${{ matrix.target }} --config "{`"version`": `"${{ steps.version.outputs.semver }}`"}"
+
+      - name: Collect artifacts (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $tag = "${{ steps.version.outputs.tag }}"
+          $nsis = Get-ChildItem "rhwp-desk/target/${{ matrix.target }}/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if ($nsis) {
+            $dest = "dist/rhwp-desk-$tag-windows-x86_64-setup.exe"
+            Copy-Item $nsis.FullName $dest
+            Write-Host "Collected: $dest ($( (Get-Item $dest).Length ) bytes)"
+          } else {
+            Write-Error "NSIS installer not found"
+          }
+
+      - name: Collect artifacts (macOS)
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          mkdir -p dist
+          TAG="${{ steps.version.outputs.tag }}"
+          DMG=$(ls rhwp-desk/target/${{ matrix.target }}/release/bundle/dmg/*.dmg 2>/dev/null | head -n 1)
+          if [ -n "$DMG" ]; then
+            DEST="dist/rhwp-desk-${TAG}-macos-${{ matrix.arch }}.dmg"
+            cp "$DMG" "$DEST"
+            ls -lh "$DEST"
+          else
+            echo "DMG file not found" && exit 1
+          fi
+
+      - name: Collect artifacts (Linux)
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          mkdir -p dist
+          TAG="${{ steps.version.outputs.tag }}"
+          APPIMAGE=$(ls rhwp-desk/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage 2>/dev/null | head -n 1)
+          DEB=$(ls rhwp-desk/target/${{ matrix.target }}/release/bundle/deb/*.deb 2>/dev/null | head -n 1)
+          if [ -n "$APPIMAGE" ]; then
+            DEST_AI="dist/rhwp-desk-${TAG}-linux-x86_64.AppImage"
+            cp "$APPIMAGE" "$DEST_AI"
+            ls -lh "$DEST_AI"
+          fi
+          if [ -n "$DEB" ]; then
+            DEST_DEB="dist/rhwp-desk-${TAG}-linux-x86_64.deb"
+            cp "$DEB" "$DEST_DEB"
+            ls -lh "$DEST_DEB"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rhwp-desk-${{ steps.version.outputs.tag }}-${{ matrix.target }}
+          path: dist/*
+          retention-days: 7
+
+  release:
+    name: Attach Desktop Installers to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'v'))
+
+    steps:
+      - name: Determine release tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist/
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          ls -lh
+          sha256sum * > SHA256SUMS-DESKTOP.txt
+          cat SHA256SUMS-DESKTOP.txt
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: |
+            dist/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') || contains(github.ref_name, '-alpha') }}
+          generate_release_notes: false

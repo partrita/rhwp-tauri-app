@@ -50,6 +50,18 @@ pub fn candidate_paths(
     if let Some(p) = env_override.filter(|s| !s.trim().is_empty()) {
         push(PathBuf::from(p.trim()), "환경변수 RHWP_DESK_ENGINE");
     }
+    if let Some(exe) = exe_dir {
+        push(exe.join(exe_name()), "앱 번들");
+        push(exe.join("bin").join(exe_name()), "앱 번들 bin");
+        if let Some(parent) = exe.parent() {
+            push(parent.join("Resources").join(exe_name()), "앱 번들 리소스");
+            push(
+                parent.join("Resources").join("bin").join(exe_name()),
+                "앱 번들 리소스 bin",
+            );
+            push(parent.join("MacOS").join(exe_name()), "앱 번들 MacOS");
+        }
+    }
     if let Some(pv) = path_var {
         let sep = if cfg!(windows) { ';' } else { ':' };
         for dir in pv.split(sep).filter(|d| !d.is_empty()) {

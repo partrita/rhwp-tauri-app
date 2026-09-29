@@ -23,10 +23,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Planner 어댑터(OpenAI 호환 HTTP) — 로컬/사내/클라우드 서버 공통 규격
 ureq = { version = "2", features = ["json"] }
-# API 키는 평문 설정 파일이 아니라 Windows 자격 증명 관리자에 저장한다
+# API 키는 평문 설정 파일이 아니라 OS별 자격 증명 관리자에 저장한다
+[target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
+
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = true
 codegen-units = 1
+panic = "abort"
+strip = true
