@@ -136,7 +136,7 @@ jobs:
         shell: pwsh
         run: |
           cd rhwp-desk
-          npx tauri build --target ${{ matrix.target }} --config "{`"version`": `"${{ steps.version.outputs.semver }}`"}"
+          npx tauri build --target ${{ matrix.target }} --bundles nsis --config "{`"version`": `"${{ steps.version.outputs.semver }}`"}"
 
       - name: Collect artifacts (Windows)
         if: matrix.os == 'windows'
