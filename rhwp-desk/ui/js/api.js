@@ -27,19 +27,45 @@ export const pathKind = (path) => invoke("path_kind", { path });
 export const listDocuments = (dir) => invoke("list_documents", { dir });
 
 export async function pickDocument() {
-  return T.dialog.open({
-    multiple: false,
-    title: "HWP/HWPX 문서 열기",
-    filters: [{ name: "HWP 문서", extensions: ["hwp", "hwpx"] }],
+  if (T && T.dialog) {
+    return T.dialog.open({
+      multiple: false,
+      title: "HWP/HWPX 문서 열기",
+      filters: [{ name: "HWP 문서", extensions: ["hwp", "hwpx"] }],
+    });
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".hwp,.hwpx";
+    input.onchange = (e) => {
+      const f = e.target.files?.[0];
+      resolve(f ? f.name : null);
+    };
+    input.click();
   });
 }
 
 export async function pickFolder() {
-  return T.dialog.open({ directory: true, title: "일괄 처리할 폴더 선택" });
+  if (T && T.dialog) {
+    return T.dialog.open({ directory: true, title: "일괄 처리할 폴더 선택" });
+  }
+  return null;
 }
 
 export async function pickAnyFile() {
-  return T.dialog.open({ multiple: false, title: "파일 선택" });
+  if (T && T.dialog) {
+    return T.dialog.open({ multiple: false, title: "파일 선택" });
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.onchange = (e) => {
+      const f = e.target.files?.[0];
+      resolve(f ? URL.createObjectURL(f) : null);
+    };
+    input.click();
+  });
 }
 
 /** 봉투 지문 — SHA-256 앞 12자리. 카드에서 산출물 동일성 비교용. */

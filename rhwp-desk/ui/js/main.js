@@ -163,8 +163,13 @@ async function init() {
     $("sb-engine-text").textContent = `${eng.version || "rhwp"} (정상 연결)`;
     $("setting-engine").value = eng.path;
   } catch (e) {
-    $("sb-engine-status").innerHTML = `<span class="dot dot-red"></span><span>엔진 없음</span>`;
-    $("firstrun").hidden = false;
+    if (!window.__TAURI__) {
+      $("sb-engine-status").innerHTML = `<span class="dot dot-green"></span><span>브라우저 미리보기 모드</span>`;
+      $("firstrun").hidden = true;
+    } else {
+      $("sb-engine-status").innerHTML = `<span class="dot dot-red"></span><span>엔진 없음</span>`;
+      $("firstrun").hidden = false;
+    }
   }
 
   // 3. 퀵 액세스 툴바 배선
