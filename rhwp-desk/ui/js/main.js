@@ -1,6 +1,6 @@
 // rhwp-desk — 한글/워드 프로세서 메인 앱 부트스트랩 및 이벤트 배선.
 
-import { mountIcons } from "./icons.js";
+import { mountIcons, ICONS } from "./icons.js";
 import * as api from "./api.js";
 import { Viewer } from "./viewer.js";
 
@@ -161,7 +161,6 @@ async function init() {
     const eng = await api.detectEngine(savedEngine);
     state.engine = eng;
     $("sb-engine-text").textContent = `${eng.version || "rhwp"} (정상 연결)`;
-    $("setting-engine").value = eng.path;
   } catch (e) {
     if (!window.__TAURI__) {
       $("sb-engine-status").innerHTML = `<span class="dot dot-green"></span><span>브라우저 미리보기 모드</span>`;
@@ -229,9 +228,6 @@ async function init() {
 
   $("m-tool-batch")?.addEventListener("click", () => { $("batch-modal").hidden = false; });
   $("batch-close")?.addEventListener("click", () => { $("batch-modal").hidden = true; });
-  $("m-tool-settings")?.addEventListener("click", () => { $("settings").hidden = false; });
-  $("btn-settings")?.addEventListener("click", () => { $("settings").hidden = false; });
-  $("settings-close")?.addEventListener("click", () => { $("settings").hidden = true; });
 
   // 5. 리본 서식 도구상자 배선
   $("font-family-select")?.addEventListener("change", (e) => {
@@ -289,14 +285,13 @@ async function init() {
   $("sheet-editor")?.addEventListener("click", updateCursorPos);
 
   // 7. 테마 전환
-  const savedTheme = LS.get("theme", "system");
+  const savedTheme = LS.get("theme", "light");
   applyTheme(savedTheme);
   $("btn-theme")?.addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme") || "light";
     const next = cur === "dark" ? "light" : "dark";
     applyTheme(next);
   });
-  $("setting-theme")?.addEventListener("change", (e) => applyTheme(e.target.value));
 
   // 8. 드래그 앤 드롭 파일 열기
   setupDragAndDrop();
@@ -348,13 +343,29 @@ async function promptInsertImage() {
 }
 
 function applyTheme(theme) {
-  if (theme === "system") {
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
-  } else {
-    document.documentElement.setAttribute("data-theme", theme);
-  }
+  const effectiveTheme =
+    theme === "system"
+      ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+      : theme;
+
+  document.documentElement.setAttribute("data-theme", effectiveTheme);
   LS.set("theme", theme);
+
+  const select = $("setting-theme");
+  if (select && select.value !== theme) {
+    select.value = theme;
+  }
+
+  const btnTheme = $("btn-theme");
+  if (btnTheme) {
+    btnTheme.title = effectiveTheme === "dark" ? "라이트 테마로 전환" : "다크 테마로 전환";
+    const iconSpan = btnTheme.querySelector("[data-icon]");
+    if (iconSpan) {
+      const nextIcon = effectiveTheme === "dark" ? "sun" : "moon";
+      iconSpan.setAttribute("data-icon", nextIcon);
+      iconSpan.innerHTML = ICONS[nextIcon] || "";
+    }
+  }
 }
 
 function setupDragAndDrop() {

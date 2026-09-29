@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -33,7 +33,6 @@
     </div>
     <div class="header-right">
       <button id="btn-theme" class="qa-btn" title="테마 전환"><span data-icon="moon"></span></button>
-      <button id="btn-settings" class="qa-btn" title="설정"><span data-icon="gear"></span></button>
     </div>
   </header>
 
@@ -120,7 +119,6 @@
         <div class="menu-entry" id="m-tool-batch"><span data-icon="folder"></span><span>폴더 일괄 변환/검증...</span></div>
         <div class="menu-divider"></div>
         <div class="menu-entry" id="m-tool-palette"><span data-icon="search"></span><span>명령 팔레트</span><kbd>Ctrl+K</kbd></div>
-        <div class="menu-entry" id="m-tool-settings"><span data-icon="gear"></span><span>환경 설정...</span></div>
       </div>
     </div>
   </nav>
@@ -300,35 +298,6 @@
       <button id="sb-zoom-in" class="status-btn" title="확대"><span data-icon="plus"></span></button>
     </div>
   </footer>
-
-  <!-- ══════════ 모달: 환경 설정 ══════════ -->
-  <div id="settings" class="overlay" hidden>
-    <div class="modal">
-      <header><h2>환경 설정</h2>
-        <button id="settings-close" class="qa-btn"><span data-icon="close"></span></button>
-      </header>
-      <div class="modal-body">
-        <label class="field">
-          <span class="field-label">rhwp 엔진 경로</span>
-          <span class="field-help">비워 두면 자동 탐색 — PATH·저장소 target 순. 환경변수 RHWP_DESK_ENGINE 지원.</span>
-          <div class="field-row">
-            <input id="setting-engine" type="text" placeholder="C:\…\rhwp.exe (비우면 자동 탐색)">
-            <button id="setting-engine-apply" class="qa-btn primary">적용</button>
-          </div>
-        </label>
-        <div class="field">
-          <span class="field-label">화면 테마</span>
-          <div class="field-row">
-            <select id="setting-theme">
-              <option value="system">시스템 설정 따름</option>
-              <option value="light">라이트 (오피스 밝은 테마)</option>
-              <option value="dark">다크 테마</option>
-            </select>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- ══════════ 모달: 명령 팔레트 (Ctrl+K) ══════════ -->
   <div id="palette" class="overlay" hidden>
