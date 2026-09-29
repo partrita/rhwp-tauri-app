@@ -1,14 +1,8 @@
-// rhwp-desk 부트스트랩·배선 — 에이전트 관제판.
-// 기본 화면은 작업 카드 스트림 + 작업 큐이며, 문서 뷰는 보조 패널이다.
+// rhwp-desk — 한글/워드 프로세서 메인 앱 부트스트랩 및 이벤트 배선.
 
-import { mountIcons, icon, ICONS } from "./icons.js";
+import { mountIcons } from "./icons.js";
 import * as api from "./api.js";
-import * as cards from "./cards.js";
-import { Palette } from "./palette.js";
 import { Viewer } from "./viewer.js";
-import { BatchRunner, VERIFY_AXES, axisArgs } from "./batch.js";
-import { runAgentTask } from "./agent.js";
-import { attachSuggestions, cliCommandFor } from "./ontology.js";
 
 const $ = (id) => document.getElementById(id);
 const LS = {
@@ -18,1002 +12,369 @@ const LS = {
 
 /* ══════════ 전역 상태 ══════════ */
 const state = {
-  engine: null,          // {path, source, version}
-  caps: null,            // capabilities 원문
-  mcp: null,             // capabilities --mcp 원문
-  tools: { openaiTools: null, byName: new Map() },
-  docs: new Map(),       // path -> {path, info: envelope|null, axes: {}}
+  engine: null, // {path, source, version}
   activeDoc: null,
-  queue: [],             // {id, label, total, done, failed, status, cancelled, detail}
-  profiles: LS.get("plannerProfiles", { list: [], activeId: null }),
-  sessionKeys: new Map(),// profileId -> 세션 한정 키
-  allowBody: false,      // 문서 본문 LLM 전송 — 기본 차단, 세션 한정
-  pendingApprovals: new Map(), // id -> {label, path, resolveApprove, resolveReject}
+  recentDocs: LS.get("recentDocs", []),
+  caps: null,
 };
 
-/* ══════════ 오늘 완료한 작업 (날짜 경계에서 리셋) ══════════ */
-function todayKey() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-function bumpDoneToday() {
-  const rec = LS.get("doneToday", { date: "", count: 0 });
-  const key = todayKey();
-  if (rec.date !== key) { rec.date = key; rec.count = 0; }
-  rec.count += 1;
-  LS.set("doneToday", rec);
-  renderDashboard();
-}
-function getDoneToday() {
-  const rec = LS.get("doneToday", { date: "", count: 0 });
-  return rec.date === todayKey() ? rec.count : 0;
-}
+let viewer = null;
 
-/* ══════════ 토스트 ══════════ */
+/* ══════════ 토스트 알림 ══════════ */
 function toast(msg, kind = "") {
   const el = document.createElement("div");
   el.className = "toast " + kind;
   el.textContent = msg;
-  $("toasts").append(el);
-  setTimeout(() => el.remove(), 4200);
+  $("toasts")?.append(el);
+  setTimeout(() => el.remove(), 4000);
 }
 
-/* ══════════ 작업 큐 ══════════ */
-const queue = {
-  start(label, total = 0) {
-    const q = { id: crypto.randomUUID(), label, total, done: 0, failed: 0, status: "run", cancelled: false, detail: "" };
-    state.queue.unshift(q);
-    renderQueue();
-    return q;
-  },
-  step(q, detail) { q.detail = detail; renderQueue(); },
-  progress(q, done, failed) { q.done = done; if (failed !== undefined) q.failed = failed; renderQueue(); },
-  finish(q, ok) { q.status = ok ? "done" : "failed"; q.detail = ""; renderQueue(); },
-  isCancelled: (q) => q.cancelled,
-};
+/* ══════════ 최근 문서 관리 ══════════ */
+function addRecentDoc(path) {
+  if (!path) return;
+  state.recentDocs = [path, ...state.recentDocs.filter((p) => p !== path)].slice(0, 10);
+  LS.set("recentDocs", state.recentDocs);
+  renderRecentDocs();
+}
 
-function renderQueue() {
-  const box = $("queue-list");
-  box.replaceChildren();
-  if (!state.queue.length) {
-    box.innerHTML = `<p class="empty-hint">대기 중인 작업이 없습니다</p>`;
+function renderRecentDocs() {
+  const list = $("recent-docs-list");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!state.recentDocs.length) {
+    list.innerHTML = '<span style="color:var(--text-muted);font-size:11px;">최근 문서 없음</span>';
     return;
   }
-  for (const q of state.queue.slice(0, 12)) {
-    const el = document.createElement("div");
-    el.className = "queue-item " + (q.status === "done" ? "done" : q.status === "failed" ? "failed" : "");
-    const head = document.createElement("div");
-    head.className = "q-head";
-    const label = document.createElement("span");
-    label.className = "q-label";
-    label.textContent = q.label;
-    label.title = q.label;
-    const count = document.createElement("span");
-    count.className = "q-count";
-    count.textContent = q.status === "run"
-      ? (q.total ? `${q.done}/${q.total}` : "진행 중")
-      : q.status === "done" ? "완료" : "실패/중단";
-    head.append(label, count);
-    if (q.status === "run") {
-      const cancel = document.createElement("button");
-      cancel.className = "btn small";
-      cancel.textContent = "취소";
-      cancel.addEventListener("click", () => { q.cancelled = true; });
-      head.append(cancel);
-    }
-    el.append(head);
-    if (q.detail) {
-      const d = document.createElement("div");
-      d.className = "q-count";
-      d.style.marginTop = "4px";
-      d.textContent = q.detail;
-      el.append(d);
-    }
-    const bar = document.createElement("div");
-    bar.className = "queue-bar";
-    const fill = document.createElement("i");
-    fill.style.width = q.status !== "run" ? "100%" : q.total ? `${(q.done / q.total) * 100}%` : "30%";
-    bar.append(fill);
-    el.append(bar);
-    if (q.failed) {
-      const f = document.createElement("div");
-      f.className = "q-fails";
-      f.textContent = `실패 ${q.failed}건 (격리 후 계속)`;
-      el.append(f);
-    }
-    box.append(el);
+  for (const path of state.recentDocs) {
+    const item = document.createElement("div");
+    item.className = "recent-doc-link";
+    item.textContent = api.basename(path);
+    item.title = path;
+    item.addEventListener("click", () => openDocument(path));
+    list.append(item);
   }
 }
 
-/* ══════════ 문서 관리 ══════════ */
-const AXES = VERIFY_AXES;
-
-function getDoc(path) {
-  if (!state.docs.has(path)) {
-    state.docs.set(path, { path, info: null, axes: {} });
-  }
-  return state.docs.get(path);
-}
-
-async function openDocument(path, { activate = true } = {}) {
-  if (!api.isDocPath(path)) { toast("HWP/HWPX 문서가 아닙니다: " + api.basename(path), "error"); return; }
-  const doc = getDoc(path);
-  if (activate) state.activeDoc = path;
-  addRecent(path);
-  renderDocs();
-  if (!doc.info) {
-    try {
-      const entry = await api.runTool(state.engine.path, ["info", path, "--json"], "info");
-      onEntry(entry);
-      if (entry.exitCode === 0 && entry.envelope) doc.info = entry.envelope;
-    } catch (e) { toast(String(e), "error"); }
-    renderDocs();
-  }
-}
-
-function addRecent(path) {
-  const list = LS.get("recent", []).filter((p) => p !== path);
-  list.unshift(path);
-  LS.set("recent", list.slice(0, 12));
-  renderRecent();
-}
-
-function axisDot(status) {
-  const el = document.createElement("span");
-  el.className = "axis " + (status || "");
-  return el;
-}
-
-function axisStatus(doc, axis) {
-  const env = doc.axes[axis];
-  if (env === "run") return "run";
-  if (!env) return "";
-  if (env.clean === true) return "ok";
-  // layout-anomaly 는 판정=데이터 계약: hasSignal 이 공식 불리언이고,
-  // overflow/overlap/empty_page 카운트는 그 근거다. 기존 축은 findingCount 등.
-  if (env.hasSignal === true) return "bad";
-  const n = env.findingCount ?? env.signalCount ?? env.hiddenCharCount
-    ?? env.overflowCount ?? env.overlapCount
-    ?? (Array.isArray(env.hiddenText) ? env.hiddenText.length : 0);
-  return n > 0 ? "bad" : "ok";
-}
-
-function renderDocs() {
-  // 사이드바 목록
-  const box = $("doc-list");
-  box.replaceChildren();
-  if (!state.docs.size) {
-    box.innerHTML = `<p class="empty-hint">문서를 끌어다 놓거나 [문서 열기]</p>`;
-  }
-  for (const doc of state.docs.values()) {
-    const el = document.createElement("div");
-    el.className = "doc-item" + (doc.path === state.activeDoc ? " active" : "");
-    const ic = document.createElement("span");
-    ic.className = "d-icon";
-    ic.innerHTML = ICONS.doc;
-    const name = document.createElement("span");
-    name.className = "d-name";
-    name.textContent = api.basename(doc.path);
-    name.title = doc.path;
-    const badges = document.createElement("span");
-    badges.className = "d-badges";
-    for (const a of AXES) badges.append(axisDot(axisStatus(doc, a)));
-    el.append(ic, name, badges);
-    el.addEventListener("click", () => { state.activeDoc = doc.path; renderDocs(); });
-    el.addEventListener("dblclick", () => viewer.open(doc.path));
-    box.append(el);
-  }
-  // 상단 문서 스트립(칩 + 액션)
-  const strip = $("doc-strip");
-  strip.replaceChildren();
-  strip.hidden = !state.docs.size;
-  for (const doc of state.docs.values()) {
-    strip.append(docChip(doc));
-  }
-  renderDashboard();
-}
-
-function docChip(doc) {
-  const chip = document.createElement("div");
-  chip.className = "doc-chip" + (doc.path === state.activeDoc ? " active" : "");
-  const name = document.createElement("span");
-  name.className = "c-name";
-  name.textContent = api.basename(doc.path);
-  name.title = doc.path;
-  name.style.cursor = "pointer";
-  name.addEventListener("click", () => { state.activeDoc = doc.path; renderDocs(); });
-  chip.append(name);
-  if (doc.info) {
-    const meta = document.createElement("span");
-    meta.className = "c-meta";
-    meta.textContent = `${doc.info.format ?? "?"} · ${doc.info.pageCount ?? "?"}쪽`;
-    chip.append(meta);
-  }
-  const axes = document.createElement("span");
-  axes.className = "c-axes";
-  axes.title = "검증 6축: 은닉 텍스트 · 주입 신호 · 유니코드 기만 · 워터마크 · 무기화 위협 · 레이아웃 이상";
-  for (const a of AXES) axes.append(axisDot(axisStatus(doc, a)));
-  chip.append(axes);
-
-  const mk = (label, title, fn) => {
-    const b = document.createElement("button");
-    b.className = "btn";
-    b.textContent = label;
-    b.title = title;
-    b.addEventListener("click", fn);
-    return b;
-  };
-  chip.append(
-    mk("검증", "6축 스윕 — 결과는 카드와 배지로", () => verifyDoc(doc.path)),
-    mk("보기", "보조 문서 패널에서 페이지 렌더", () => viewer.open(doc.path)),
-    mk("텍스트", "쪽별 TXT 추출 (문서 폴더/rhwp-out)", () => exportText(doc.path)),
-    mk("PDF", "PDF 내보내기 (문서 폴더/rhwp-out)", () => exportPdf(doc.path)),
-    mk("HWPX", "HWPX로 변환 (문서 폴더/rhwp-out, --verify)", () => convertHwpx(doc.path)),
-    mk("HWP", "편집용 HWP5로 변환 (문서 폴더/rhwp-out, --verify)", () => convertHwp5(doc.path)),
-  );
-  const close = document.createElement("button");
-  close.className = "btn icon-btn";
-  close.innerHTML = ICONS.close;
-  close.title = "목록에서 제거(파일은 그대로)";
-  close.addEventListener("click", () => {
-    state.docs.delete(doc.path);
-    if (state.activeDoc === doc.path) state.activeDoc = state.docs.keys().next().value ?? null;
-    renderDocs();
-  });
-  chip.append(close);
-  return chip;
-}
-
-/* ══════════ 관제판(Fleet Dashboard) — 기본 화면 ══════════ */
-function docHasAttention(doc) {
-  return AXES.some((a) => axisStatus(doc, a) === "bad");
-}
-function docAttentionReasons(doc) {
-  const LABEL = {
-    "hidden-text": "은닉 텍스트", injection: "주입 신호", unicode: "유니코드 기만",
-    watermark: "워터마크", "threat-scan": "무기화 위협", "layout-anomaly": "레이아웃 이상",
-  };
-  return AXES.filter((a) => axisStatus(doc, a) === "bad").map((a) => LABEL[a]);
-}
-function docIsChecked(doc) {
-  return AXES.every((a) => doc.axes[a] && doc.axes[a] !== "run");
-}
-
-function renderDashboard() {
-  const panel = $("fleet-dashboard");
-  if (!panel) return;
-  const docs = [...state.docs.values()];
-  const checked = docs.filter(docIsChecked);
-  const attention = checked.filter(docHasAttention);
-  const ok = checked.filter((d) => !docHasAttention(d));
-  const pending = [...state.pendingApprovals.values()];
-
-  $("fs-total").textContent = docs.length;
-  $("fs-ok").textContent = ok.length;
-  $("fs-attention").textContent = attention.length;
-  $("fs-pending").textContent = pending.length;
-  $("fs-done-today").textContent = getDoneToday();
-
-  // 주의 문서 목록
-  const attBox = $("fleet-attention");
-  attBox.replaceChildren();
-  if (!attention.length) {
-    attBox.innerHTML = `<p class="empty-hint">${docs.length ? "검증 통과 — 주의할 문서가 없습니다" : "검증을 돌리면 발견된 문제가 여기 모입니다"}</p>`;
-  } else {
-    for (const doc of attention) {
-      const row = document.createElement("div");
-      row.className = "fleet-row";
-      const name = document.createElement("span");
-      name.className = "fr-name";
-      name.textContent = api.basename(doc.path);
-      name.title = doc.path;
-      const reason = document.createElement("span");
-      reason.className = "fr-badge";
-      reason.textContent = docAttentionReasons(doc).join(" · ");
-      row.append(name, reason);
-      row.addEventListener("click", () => { state.activeDoc = doc.path; renderDocs(); viewer.open(doc.path); });
-      attBox.append(row);
-    }
-  }
-
-  // 승인 대기 목록
-  const apBox = $("fleet-approvals");
-  apBox.replaceChildren();
-  if (!pending.length) {
-    apBox.innerHTML = `<p class="empty-hint">문서를 바꾸는 작업은 실행 전 여기서 승인합니다</p>`;
-  } else {
-    for (const [id, p] of state.pendingApprovals) {
-      const row = document.createElement("div");
-      row.className = "fleet-row";
-      const name = document.createElement("span");
-      name.className = "fr-name";
-      name.textContent = p.label;
-      name.title = p.path || p.label;
-      const badge = document.createElement("span");
-      badge.className = "fr-badge warn";
-      badge.textContent = "승인 대기";
-      const actions = document.createElement("span");
-      actions.className = "fr-actions";
-      const ok2 = document.createElement("button");
-      ok2.className = "btn small primary"; ok2.textContent = "승인";
-      ok2.addEventListener("click", (ev) => { ev.stopPropagation(); p.approve(); });
-      const no2 = document.createElement("button");
-      no2.className = "btn small"; no2.textContent = "거절";
-      no2.addEventListener("click", (ev) => { ev.stopPropagation(); p.reject(); });
-      actions.append(ok2, no2);
-      row.append(name, badge, actions);
-      row.addEventListener("click", () => { const c = document.querySelector(`[data-entry-id="${id}"]`); c?.scrollIntoView({ behavior: "smooth", block: "center" }); });
-      apBox.append(row);
-    }
-  }
-  panel.hidden = false;
-}
-
-/** 승인 카드를 만들고 관제판 승인 대기 목록에도 등록한다(카드/관제판 어느 쪽에서든 승인·거절 가능). */
-function registerApproval(id, label, path, { onApprove, onReject }) {
-  let settled = false;
-  const settle = (fn) => {
-    if (settled) return;
-    settled = true;
-    state.pendingApprovals.delete(id);
-    renderDashboard();
-    fn();
-  };
-  state.pendingApprovals.set(id, {
-    label, path,
-    approve: () => settle(onApprove),
-    reject: () => settle(onReject),
-  });
-  renderDashboard();
-  return {
-    settleApprove: () => state.pendingApprovals.get(id)?.approve(),
-    settleReject: () => state.pendingApprovals.get(id)?.reject(),
-  };
-}
-
-function renderRecent() {
-  const box = $("recent-list");
-  box.replaceChildren();
-  const list = LS.get("recent", []);
-  if (!list.length) { box.innerHTML = `<p class="empty-hint">아직 없습니다</p>`; return; }
-  for (const p of list) {
-    const el = document.createElement("div");
-    el.className = "doc-item";
-    const ic = document.createElement("span");
-    ic.className = "d-icon";
-    ic.innerHTML = ICONS.journal;
-    const name = document.createElement("span");
-    name.className = "d-name";
-    name.textContent = api.basename(p);
-    name.title = p;
-    el.append(ic, name);
-    el.addEventListener("click", async () => {
-      if ((await api.pathKind(p)) === "file") openDocument(p);
-      else { toast("파일이 더 이상 없습니다", "error"); LS.set("recent", LS.get("recent", []).filter((x) => x !== p)); renderRecent(); }
-    });
-    box.append(el);
-  }
-}
-
-/* ══════════ 카드 공통 ══════════ */
-function onEntry(entry, opts = {}) {
-  const card = cards.addToolCard(entry, { onViewDoc: (p) => viewer.open(p), ...opts });
-  // 관제판 등재 — 봉투에 source가 있으면(batch/agent가 연 문서 포함) 관리 목록에 올린다.
-  const src = entry.envelope?.source ? String(entry.envelope.source) : null;
-  if (src && api.isDocPath(src)) {
-    const doc = getDoc(src);
-    // 검증 축 배지 갱신 — 축은 "inspect <axis>" 서브커맨드거나(hidden-text 등),
-    // threat-scan처럼 축 이름 자체가 최상위 명령인 경우 둘 다 있다.
-    if (entry.command === "inspect") {
-      const axis = entry.args[1];
-      if (AXES.includes(axis)) doc.axes[axis] = entry.envelope;
-    } else if (AXES.includes(entry.command)) {
-      doc.axes[entry.command] = entry.envelope;
-    }
-    renderDocs();
-  }
-  if (entry.command === "export-text" && entry.envelope) cards.attachTextPreview(card, entry.envelope);
-  if (!opts.historical && (entry.exitCode === 0 || entry.exitCode === 3)) bumpDoneToday();
-  attachSuggestions(card, entry, (nextTool) => {
-    palette.open();
-    const input = $("palette-input");
-    input.value = cliCommandFor(nextTool);
-    input.dispatchEvent(new Event("input"));
-  });
-  return card;
-}
-
-/* ══════════ 검증 스윕 ══════════ */
-async function verifyDoc(path) {
-  const doc = getDoc(path);
-  const axes = [...AXES];
-  const q = queue.start(`검증: ${api.basename(path)}`, axes.length);
-  let done = 0, bad = 0;
-  for (const axis of axes) {
-    if (queue.isCancelled(q)) break;
-    doc.axes[axis] = "run";
-    renderDocs();
-    queue.step(q, `inspect ${axis}`);
-    try {
-      const entry = await api.runTool(state.engine.path, axisArgs(axis, path), "verify");
-      onEntry(entry);
-      if (entry.exitCode !== 0 && entry.exitCode !== 3) bad++;
-      if (!entry.envelope) doc.axes[axis] = undefined;
-    } catch (e) {
-      doc.axes[axis] = undefined;
-      toast(String(e), "error");
-      bad++;
-    }
-    queue.progress(q, ++done, bad);
-  }
-  renderDocs();
-  queue.finish(q, bad === 0);
-}
-
-/* ══════════ 내보내기 ══════════ */
-async function exportText(path) {
-  const outDir = api.dirname(path) + "\\rhwp-out";
+/* ══════════ 문서 열기 ══════════ */
+async function openDocument(path) {
   try {
-    const entry = await api.runTool(state.engine.path, ["export-text", path, "-o", outDir], "export");
-    onEntry(entry);
-    if (entry.exitCode === 0) toast("텍스트 추출 완료: " + outDir, "ok");
-  } catch (e) { toast(String(e), "error"); }
-}
-async function exportPdf(path) {
-  const out = api.dirname(path) + "\\rhwp-out\\" + api.basename(path).replace(/\.(hwp|hwpx)$/i, "") + ".pdf";
-  try {
-    const entry = await api.runTool(state.engine.path, ["export-pdf", path, "-o", out, "--json"], "export");
-    onEntry(entry);
-    if (entry.exitCode === 0) toast("PDF 저장: " + out, "ok");
-  } catch (e) { toast(String(e), "error"); }
-}
-async function convertHwpx(path) {
-  const out = api.dirname(path) + "\\rhwp-out\\" + api.basename(path).replace(/\.(hwp|hwpx)$/i, "") + ".hwpx";
-  try {
-    // exit 3 = 변환은 저장됐지만 IR 왕복 차이 — 도구 실패가 아니라 판정.
-    const entry = await api.runTool(state.engine.path, ["export-hwpx", path, out, "--verify", "--json"], "export");
-    onEntry(entry);
-    if (entry.exitCode === 0) toast("HWPX 저장: " + out, "ok");
-    else if (entry.exitCode === 3) toast("HWPX 저장(IR 차이): " + out, "");
-  } catch (e) { toast(String(e), "error"); }
-}
-async function convertHwp5(path) {
-  const out = api.dirname(path) + "\\rhwp-out\\" + api.basename(path).replace(/\.(hwp|hwpx)$/i, "") + ".hwp";
-  try {
-    const entry = await api.runTool(state.engine.path, ["convert", path, out, "--verify", "--json"], "export");
-    onEntry(entry);
-    if (entry.exitCode === 0) toast("HWP 저장: " + out, "ok");
-    else if (entry.exitCode === 3) toast("HWP 저장(IR 차이): " + out, "");
-  } catch (e) { toast(String(e), "error"); }
-}
-
-/* ══════════ 뷰어·팔레트·배치 ══════════ */
-const viewer = new Viewer({
-  getEngine: () => state.engine?.path,
-  onError: (e) => toast(e, "error"),
-  onInfo: (p) => state.docs.get(p)?.info,
-});
-
-const palette = new Palette({
-  getCaps: () => state.caps,
-  getActiveDoc: () => state.activeDoc,
-  onRun: (args, meta) => runPaletteCommand(args, meta),
-});
-
-async function runPaletteCommand(args, meta) {
-  try {
-    if (meta.mutating && !args.includes("--dry-run")) {
-      // 행동 경계: 문서를 바꾸는 명령은 dry-run 미리보기 → 승인 카드 → 실행
-      const dryEntry = await api.runTool(state.engine.path, [...args, "--dry-run"], "palette");
-      const reg = registerApproval(dryEntry.id, `${meta.name || args[0]} — ${api.basename(args[1] || "")}`, dryEntry.envelope?.source, {
-        onApprove: async () => {
-          try {
-            const entry = await api.runTool(state.engine.path, args, "approval");
-            onEntry(entry);
-            const src = entry.envelope?.source;
-            if (src) viewer.invalidate(String(src));
-          } catch (e) { toast(String(e), "error"); }
-        },
-        onReject: () => {},
-      });
-      cards.addApprovalCard(dryEntry, {
-        onApprove: reg.settleApprove,
-        onReject: reg.settleReject,
-        onViewDoc: (p) => viewer.open(p),
-      });
-    } else {
-      const running = cards.addRunningCard("rhwp " + args.join(" "));
-      const entry = await api.runTool(state.engine.path, args, "palette");
-      running.remove();
-      onEntry(entry);
-    }
-  } catch (e) { toast(String(e), "error"); }
-}
-
-const batch = new BatchRunner({
-  enginePath: () => state.engine?.path,
-  queue,
-  onEntry,
-  note: (t, b) => cards.addNoticeCard(t, b),
-});
-
-let pendingBatch = null;
-async function startBatch(dir) {
-  try {
-    const prep = await batch.prepare(dir);
-    if (!prep.files.length) { toast("폴더에 HWP/HWPX 문서가 없습니다", "error"); return; }
-    pendingBatch = prep;
-    $("batch-summary").textContent = `${dir} — 문서 ${prep.files.length}건`;
-    $("batch-modal").hidden = false;
-  } catch (e) { toast(String(e), "error"); }
-}
-
-/* ══════════ Planner 연결 ══════════ */
-function activeProfile() {
-  return state.profiles.list.find((p) => p.id === state.profiles.activeId) || null;
-}
-
-function saveProfiles() { LS.set("plannerProfiles", state.profiles); }
-
-function renderMode() {
-  const badge = $("privacy-badge");
-  const prof = activeProfile();
-  badge.classList.remove("offline", "local", "remote");
-  if (!prof) {
-    badge.classList.add("offline");
-    badge.textContent = "오프라인";
-    badge.title = "Planner 미연결 — 문서는 이 기계 밖으로 나가지 않습니다. 클릭하면 설정.";
-  } else if (/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(prof.baseUrl)) {
-    badge.classList.add("local");
-    badge.textContent = "로컬 모델";
-    badge.title = `${prof.name} (${prof.model}) — 로컬 서버라 문서 데이터가 기계 밖으로 나가지 않습니다.`;
-  } else {
-    badge.classList.add("remote");
-    badge.textContent = "외부 API";
-    badge.title = `${prof.name} (${prof.model}) — 외부 서버입니다. 도구 결과의 메타데이터가 전송되며, 본문은 '본문 전송' 토글을 켠 경우에만 나갑니다. 전송 내용은 planner/chat 카드에서 확인하세요.`;
-  }
-  // 컴포저 상태
-  const stateText = $("composer-state-text");
-  const dot = $("composer-state").querySelector(".dot");
-  dot.className = "dot " + (prof ? "dot-ok" : "dot-gray");
-  stateText.textContent = prof ? `${prof.name} · ${prof.model}` : "Planner 미연결";
-  $("composer-input").placeholder = prof
-    ? "자연어로 지시하세요 — 예: 이 문서 숨긴 텍스트 있는지 보고 요약해줘"
-    : "Planner 미연결 — 설정에서 모델을 연결하거나 Ctrl+K 명령 팔레트를 사용하세요";
-}
-
-function renderProfiles() {
-  const box = $("llm-profiles");
-  box.replaceChildren();
-  for (const p of state.profiles.list) {
-    const el = document.createElement("div");
-    el.className = "llm-profile" + (p.id === state.profiles.activeId ? " active" : "");
-    const name = document.createElement("span");
-    name.className = "lp-name";
-    name.textContent = p.name;
-    const meta = document.createElement("span");
-    meta.className = "lp-meta";
-    meta.textContent = `${p.baseUrl} · ${p.model}` + (p.keyStore === "keyring" ? " · 키:자격증명관리자" : p.keyStore === "session" ? " · 키:세션" : "");
-    el.append(name, meta);
-    const mk = (label, fn, cls = "btn small") => {
-      const b = document.createElement("button");
-      b.className = cls;
-      b.textContent = label;
-      b.addEventListener("click", fn);
-      return b;
-    };
-    el.append(
-      mk(p.id === state.profiles.activeId ? "사용 중" : "사용", async () => {
-        state.profiles.activeId = p.id;
-        saveProfiles(); renderProfiles(); renderMode();
-        cards.addNoticeCard("Planner 연결됨", `${p.name} (${p.model}) — 이제 아래 입력창에 자연어로 지시할 수 있습니다. 문서를 바꾸는 도구는 항상 승인 카드를 거칩니다.`);
-        await ensureTools();
-      }),
-      mk("테스트", async (ev) => {
-        ev.target.textContent = "…";
-        const r = await api.invoke("planner_test", {
-          baseUrl: p.baseUrl, model: p.model, profileId: p.id,
-          sessionKey: state.sessionKeys.get(p.id) ?? null,
-        });
-        ev.target.textContent = "테스트";
-        toast(r.ok ? `연결 성공 (${r.latencyMs}ms)` : r.message, r.ok ? "ok" : "error");
-      }),
-      mk("삭제", async () => {
-        if (p.keyStore === "keyring") { try { await api.invoke("secret_delete", { profileId: p.id }); } catch {} }
-        state.profiles.list = state.profiles.list.filter((x) => x.id !== p.id);
-        if (state.profiles.activeId === p.id) state.profiles.activeId = null;
-        saveProfiles(); renderProfiles(); renderMode();
-      }),
-    );
-    box.append(el);
-  }
-  if (!state.profiles.list.length) {
-    box.innerHTML = `<p class="empty-hint">등록된 엔드포인트가 없습니다 — 아래에서 추가하거나, 로컬 서버가 떠 있으면 자동 탐지 카드가 뜹니다.</p>`;
-  }
-}
-
-async function probeLocal({ silent = true } = {}) {
-  try {
-    const found = await api.invoke("probe_local_llm");
-    const area = $("llm-probe-area");
-    area.replaceChildren();
-    for (const srv of found) {
-      const card = document.createElement("div");
-      card.className = "llm-probe-card";
-      const label = document.createElement("span");
-      label.textContent = `로컬 모델 서버 발견: ${srv.baseUrl} (모델 ${srv.models.length}개)`;
-      const sel = document.createElement("select");
-      for (const m of srv.models) {
-        const o = document.createElement("option");
-        o.value = m; o.textContent = m;
-        sel.append(o);
-      }
-      const btn = document.createElement("button");
-      btn.className = "btn small primary";
-      btn.textContent = "연결하기";
-      btn.addEventListener("click", () => {
-        const id = crypto.randomUUID();
-        state.profiles.list.push({ id, name: "로컬 서버", baseUrl: srv.baseUrl, model: sel.value, keyStore: "none" });
-        state.profiles.activeId = id;
-        saveProfiles(); renderProfiles(); renderMode();
-        toast("로컬 모델 연결됨: " + sel.value, "ok");
-        ensureTools();
-      });
-      card.append(label, sel, btn);
-      area.append(card);
-    }
-    if (found.length && !activeProfile() && !silent) toast("로컬 모델 서버를 발견했습니다 — 설정에서 연결하세요", "ok");
-    if (found.length && !activeProfile()) {
-      cards.addNoticeCard("로컬 모델 발견", `${found[0].baseUrl} 에서 모델 ${found[0].models.length}개를 찾았습니다. 설정 → 모델 연결에서 한 번의 클릭으로 연결할 수 있습니다. 로컬 모델은 문서 데이터가 기계 밖으로 나가지 않습니다.`);
-    }
-    return found;
-  } catch { return []; }
-}
-
-/** capabilities --mcp 도구를 로드해 Planner 에 넘길 준비. */
-const AGENT_TOOL_ALLOWLIST = [
-  "hwp_info", "hwp_digest", "hwp_export_text", "hwp_export_structure",
-  "hwp_search", "hwp_extract_data", "hwp_fields", "hwp_explain",
-  "hwp_inspect_hidden_text", "hwp_inspect_injection", "hwp_inspect_unicode",
-  "hwp_inspect_watermark", "hwp_threat_scan", "hwp_layout_anomaly",
-  "hwp_export_pdf", "hwp_export_svg", "hwp_export_markdown", "hwp_thumbnail",
-  "hwp_convert_hwpx", "hwp_convert_hwp5",
-  "hwp_ir_diff", "hwp_render_diff", "hwp_split_document",
-  "hwp_export_tables", "hwp_table_to_csv", "hwp_csv_to_table",
-  "hwp_chart_to_csv", "hwp_csv_to_chart", "hwp_replace_text",
-  "hwp_fill_fields", "hwp_set_cell", "hwp_set_checkbox", "hwp_insert_image",
-  "hwp_redact", "hwp_sanitize",
-];
-async function ensureTools() {
-  if (state.tools.openaiTools || !state.engine) return;
-  try {
-    state.mcp = await api.invoke("load_mcp_tools", { enginePath: state.engine.path });
-    state.tools.openaiTools = await api.invoke("mcp_to_openai_tools", {
-      mcp: state.mcp, allowlist: AGENT_TOOL_ALLOWLIST,
-    });
-    state.tools.byName = new Map((state.mcp.tools || []).map((t) => [t.name, t]));
+    state.activeDoc = path;
+    addRecentDoc(path);
+    await viewer.open(path);
+    toast(`${api.basename(path)} 문서를 열었습니다.`, "ok");
   } catch (e) {
-    toast("도구 스키마 로드 실패: " + e, "error");
+    toast(`문서 열기 실패: ${e}`, "bad");
   }
 }
 
-/* 승인 카드 → Promise */
-function approvalPromise(dryEntry, label) {
-  return new Promise((resolve) => {
-    const id = dryEntry?.id || crypto.randomUUID();
-    const path = dryEntry?.envelope?.source;
-    const reg = registerApproval(id, label, path, {
-      onApprove: () => resolve(true),
-      onReject: () => resolve(false),
-    });
-    if (dryEntry) {
-      cards.addApprovalCard(dryEntry, {
-        onApprove: reg.settleApprove,
-        onReject: reg.settleReject,
-        onViewDoc: (p) => viewer.open(p),
-      });
-    } else {
-      const card = cards.addNoticeCard(`승인 대기 — ${label}`,
-        "문서를 바꾸는 도구입니다. dry-run 미리보기를 지원하지 않아 바로 실행 여부만 묻습니다.");
-      card.dataset.entryId = id;
-      const actions = document.createElement("div");
-      actions.className = "approval-actions";
-      const ok = document.createElement("button");
-      ok.className = "btn primary"; ok.textContent = "승인하고 실행";
-      const no = document.createElement("button");
-      no.className = "btn"; no.textContent = "거부";
-      ok.addEventListener("click", () => { actions.remove(); reg.settleApprove(); });
-      no.addEventListener("click", () => { actions.remove(); reg.settleReject(); });
-      actions.append(ok, no);
-      card.classList.add("approval");
-      card.append(actions);
-    }
-  });
-}
-
-function assistantCard(text, meta) {
-  const card = cards.addNoticeCard(`Planner 요약 (${meta.model})`, text);
-  card.classList.add("assistant-card");
-  const tag = document.createElement("div");
-  tag.className = "assistant-tag";
-  tag.textContent = "모델 출력 — 검증되지 않은 내용입니다. 근거는 위 도구 카드의 봉투를 보세요.";
-  card.append(tag);
-  return card;
-}
-
-async function submitComposer() {
-  const input = $("composer-input");
-  const text = input.value.trim();
-  if (!text) return;
-  input.value = "";
-  const prof = activeProfile();
-  if (!prof) {
-    cards.addNoticeCard("Planner 미연결",
-      "자연어 지시는 모델 연결 후 가능합니다. 설정(톱니) → 모델 연결에서 로컬 서버나 API 엔드포인트를 등록하세요. 그 전에도 Ctrl+K 명령 팔레트로 모든 작업을 할 수 있습니다.");
-    return;
-  }
-  await ensureTools();
-  if (!state.tools.openaiTools) return;
-  cards.addNoticeCard("사용자 지시", text);
-  runAgentTask(text, {
-    profile: () => activeProfile(),
-    sessionKey: () => state.sessionKeys.get(activeProfile()?.id) ?? null,
-    enginePath: () => state.engine.path,
-    tools: state.tools,
-    allowBody: () => state.allowBody,
-    docPaths: () => [...state.docs.keys()],
-    ui: {
-      plannerCard: (entry) => onEntry(entry),
-      toolCard: (entry) => onEntry(entry),
-      assistantCard,
-      approval: approvalPromise,
-      note: (t, b) => cards.addNoticeCard(t, b),
-    },
-    queue,
-  });
-}
-
-/* ══════════ 테마 ══════════ */
-function applyTheme(mode) {
-  const root = document.documentElement;
-  if (mode === "light" || mode === "dark") root.setAttribute("data-theme", mode);
-  else root.removeAttribute("data-theme");
-  LS.set("theme", mode);
-  const dark = mode === "dark" || (mode !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
-  $("btn-theme").innerHTML = "";
-  $("btn-theme").append(icon(dark ? "sun" : "moon"));
-}
-
-/* ══════════ 엔진 부트 ══════════ */
-async function bootEngine() {
-  const configured = LS.get("enginePath", "");
+async function promptOpenDocument() {
   try {
-    state.engine = await api.detectEngine(configured || null);
-    $("engine-status").querySelector(".dot").className = "dot dot-ok";
-    $("engine-version").textContent = `${state.engine.version ?? "rhwp"} (${state.engine.source})`;
-    $("engine-path").textContent = state.engine.path;
-    $("engine-path").title = state.engine.path;
-    state.caps = await api.loadCapabilities(state.engine.path);
-    $("firstrun").hidden = true;
-    return true;
+    const selected = await api.pickDocument();
+    if (selected) {
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      if (path) await openDocument(path);
+    }
   } catch (e) {
-    $("engine-status").querySelector(".dot").className = "dot dot-bad";
-    $("engine-version").textContent = "엔진 없음";
-    $("engine-path").textContent = String(e);
-    $("firstrun").hidden = false;
-    return false;
+    toast(`파일 대화상자 오류: ${e}`, "bad");
   }
 }
 
-/* ══════════ 저널 복원 ══════════ */
-async function restoreJournal() {
-  try {
-    const entries = await api.readJournal(60);
-    if (entries.length) {
-      cards.addDivider(`이전 기록 ${entries.length}건 (저널: journal.ndjson)`);
-      for (const e of entries) onEntry(e, { historical: true });
-      cards.addDivider("여기부터 이번 세션");
-    }
-  } catch { /* 저널 없음은 정상 */ }
+/* ══════════ 새 문서 생성 ══════════ */
+function newDocument() {
+  state.activeDoc = null;
+  $("doc-title-text").textContent = "새 문서.hwpx";
+  $("doc-format-badge").textContent = "HWPX";
+  document.title = "새 문서 - rhwp 워드 프로세서";
+
+  $("welcome-watermark")?.setAttribute("hidden", "true");
+  viewer.setMode("editor");
+
+  const editor = $("sheet-editor");
+  if (editor) {
+    editor.innerHTML = `
+      <h1 style="text-align: center; margin-bottom: 24px; font-size: 20pt; font-weight: bold; font-family: '함초롬바탕', serif;">제목을 입력하세요</h1>
+      <p style="line-height: 1.6; margin-bottom: 12px; font-size: 10pt;">새로운 문서를 작성하십시오.</p>
+    `;
+    editor.focus();
+  }
+  updateCharCount();
+  toast("새 문서를 만들었습니다.");
 }
 
-/* ══════════ 이벤트 배선 ══════════ */
-function wire() {
-  $("btn-open").addEventListener("click", async () => {
-    const p = await api.pickDocument();
-    if (p) openDocument(p);
-  });
-  $("btn-batch").addEventListener("click", async () => {
-    const dir = await api.pickFolder();
-    if (dir) startBatch(dir);
-  });
-  $("fleet-add-folder").addEventListener("click", async () => {
-    const dir = await api.pickFolder();
-    if (dir) startBatch(dir);
-  });
-  for (const stat of document.querySelectorAll(".fleet-stat")) {
-    stat.addEventListener("click", () => {
-      const f = stat.dataset.filter;
-      if (f === "attention") $("fleet-attention").scrollIntoView({ behavior: "smooth", block: "nearest" });
-      else if (f === "pending") $("fleet-approvals").scrollIntoView({ behavior: "smooth", block: "nearest" });
-      else $("doc-strip")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-  }
-  $("btn-palette").addEventListener("click", () => palette.open());
-  $("btn-viewer-toggle").addEventListener("click", () => {
-    if (viewer.visible) viewer.hide();
-    else if (state.activeDoc) viewer.open(state.activeDoc);
-    else viewer.show();
-  });
-  $("btn-theme").addEventListener("click", () => {
-    const cur = LS.get("theme", "system");
-    applyTheme(cur === "dark" ? "light" : cur === "light" ? "system" : "dark");
-    $("setting-theme").value = LS.get("theme", "system");
-  });
-  $("btn-settings").addEventListener("click", () => { $("settings").hidden = false; probeLocal(); });
-  $("privacy-badge").addEventListener("click", () => { $("settings").hidden = false; probeLocal(); });
-  $("settings-close").addEventListener("click", () => { $("settings").hidden = true; });
-  $("batch-close").addEventListener("click", () => { $("batch-modal").hidden = true; });
-  for (const btn of document.querySelectorAll(".batch-mode")) {
-    btn.addEventListener("click", () => {
-      $("batch-modal").hidden = true;
-      if (pendingBatch) batch.run(pendingBatch.dir, pendingBatch.files, btn.dataset.mode);
-    });
-  }
-
-  // 설정: 엔진 경로
-  $("setting-engine").value = LS.get("enginePath", "");
-  $("setting-engine-apply").addEventListener("click", async () => {
-    LS.set("enginePath", $("setting-engine").value.trim());
-    const ok = await bootEngine();
-    toast(ok ? "엔진 연결: " + state.engine.version : "엔진을 찾지 못했습니다", ok ? "ok" : "error");
-  });
-  $("setting-theme").value = LS.get("theme", "system");
-  $("setting-theme").addEventListener("change", (e) => applyTheme(e.target.value));
-
-  // 첫 실행 화면
-  $("firstrun-apply").addEventListener("click", async () => {
-    LS.set("enginePath", $("firstrun-engine").value.trim());
-    $("setting-engine").value = $("firstrun-engine").value.trim();
-    if (!(await bootEngine())) $("firstrun-error").textContent = "해당 경로에서 실행 파일을 확인하지 못했습니다.";
-  });
-  $("firstrun-retry").addEventListener("click", async () => {
-    if (!(await bootEngine())) $("firstrun-error").textContent = "여전히 찾지 못했습니다. 경로를 직접 지정하세요.";
-  });
-
-  // Planner 추가 폼
-  $("llm-fetch-models").addEventListener("click", async () => {
-    const base = $("llm-base").value.trim();
-    if (!base) return;
+/* ══════════ PDF 내보내기 ══════════ */
+async function exportPdf() {
+  if (state.activeDoc && state.engine) {
+    toast("PDF 변환 중…");
     try {
-      const models = await api.invoke("planner_list_models", {
-        baseUrl: base, profileId: null, sessionKey: $("llm-key").value || null,
-      });
-      const dl = $("llm-model-list");
-      dl.replaceChildren();
-      for (const m of models) {
-        const o = document.createElement("option");
-        o.value = m;
-        dl.append(o);
-      }
-      if (models.length && !$("llm-model").value) $("llm-model").value = models[0];
-      toast(`모델 ${models.length}개 확인`, "ok");
-    } catch (e) { toast(String(e), "error"); }
-  });
-  $("llm-test").addEventListener("click", async () => {
-    const r = await api.invoke("planner_test", {
-      baseUrl: $("llm-base").value.trim(), model: $("llm-model").value.trim(),
-      profileId: null, sessionKey: $("llm-key").value || null,
-    });
-    $("llm-test-result").textContent = r.ok ? `성공 — ${r.message}` : `실패 — ${r.message}`;
-    $("llm-test-result").style.color = r.ok ? "var(--ok)" : "var(--bad)";
-  });
-  $("llm-save").addEventListener("click", async () => {
-    const name = $("llm-name").value.trim() || "엔드포인트";
-    const baseUrl = $("llm-base").value.trim();
-    const model = $("llm-model").value.trim();
-    if (!baseUrl || !model) { toast("Base URL과 모델명을 입력하세요", "error"); return; }
-    const id = crypto.randomUUID();
-    const key = $("llm-key").value;
-    let keyStore = "none";
-    if (key) {
-      if ($("llm-key-session").checked) {
-        state.sessionKeys.set(id, key);
-        keyStore = "session";
+      const entry = await api.runTool(
+        state.engine.path,
+        ["export-pdf", state.activeDoc, "--json"],
+        "word-processor"
+      );
+      if (entry.exitCode === 0) {
+        toast("PDF 내보내기 완료!", "ok");
       } else {
-        try {
-          await api.invoke("secret_set", { profileId: id, key });
-          keyStore = "keyring";
-        } catch (e) {
-          state.sessionKeys.set(id, key);
-          keyStore = "session";
-          toast("자격 증명 관리자 저장 실패 — 이 세션에만 유지합니다: " + e, "error");
-        }
+        toast(`PDF 내보내기 실패: ${entry.stderrTail || "오류"}`, "bad");
       }
+    } catch (e) {
+      toast(`PDF 변환 실패: ${e}`, "bad");
     }
-    state.profiles.list.push({ id, name, baseUrl, model, keyStore });
-    state.profiles.activeId = id;
-    saveProfiles(); renderProfiles(); renderMode();
-    $("llm-key").value = "";
-    toast("프로필 저장됨: " + name, "ok");
-    ensureTools();
-  });
-
-  // 컴포저
-  $("composer-send").addEventListener("click", submitComposer);
-  $("composer-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitComposer(); });
-  $("body-toggle").addEventListener("click", () => {
-    state.allowBody = !state.allowBody;
-    $("body-toggle").textContent = "본문 전송: " + (state.allowBody ? "허용" : "차단");
-    $("body-toggle").style.color = state.allowBody ? "var(--warn)" : "";
-    cards.addNoticeCard(
-      state.allowBody ? "본문 전송 허용됨 (이 세션 한정)" : "본문 전송 차단됨",
-      state.allowBody
-        ? "이제 도구 결과의 문서 본문 텍스트가 Planner 모델로 전송될 수 있습니다. 전송된 내용은 planner/chat 카드의 request에서 그대로 확인할 수 있습니다."
-        : "도구 결과의 본문성 문자열은 [본문 차단]으로 가려져 전송됩니다. 수치·메타데이터만 나갑니다.",
-    );
-  });
-
-  // 키보드
-  document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-      e.preventDefault();
-      palette.isOpen ? palette.close() : palette.open();
-    } else if (e.key === "Escape") {
-      palette.close();
-      $("settings").hidden = true;
-      $("batch-modal").hidden = true;
-    }
-  });
-
-  // 드래그앤드롭 (Tauri 네이티브 이벤트)
-  api.listen("tauri://drag-enter", () => { $("drop-veil").hidden = false; });
-  api.listen("tauri://drag-leave", () => { $("drop-veil").hidden = true; });
-  api.listen("tauri://drag-drop", async (ev) => {
-    $("drop-veil").hidden = true;
-    const paths = ev.payload?.paths || [];
-    for (const p of paths) {
-      const kind = await api.pathKind(p);
-      if (kind === "dir") startBatch(p);
-      else if (kind === "file" && api.isDocPath(p)) openDocument(p);
-      else toast("지원하지 않는 항목: " + api.basename(p), "error");
-    }
-  });
-}
-
-/* ══════════ 시작 ══════════ */
-// 조용한 실패 방지 — 처리되지 않은 오류는 토스트로 드러낸다.
-window.addEventListener("error", (e) => toast("오류: " + (e.message || e.error), "error"));
-window.addEventListener("unhandledrejection", (e) => toast("오류: " + e.reason, "error"));
-
-async function boot() {
-  mountIcons();
-  applyTheme(LS.get("theme", "system"));
-  wire();
-  renderRecent();
-  renderQueue();
-  renderProfiles();
-  renderMode();
-  renderDashboard();
-
-  const ok = await bootEngine();
-  await restoreJournal();
-  probeLocal();
-
-  if (ok) {
-    // 파일 연결/명령행 인자
-    try {
-      const args = await api.startupArgs();
-      for (const a of args) {
-        if (api.isDocPath(a) && (await api.pathKind(a)) === "file") await openDocument(a);
-      }
-      // 파일 연결/더블클릭으로 열렸을 때는 보조 문서 패널도 바로 연다 (M0 뷰어 역할).
-      if (state.activeDoc) await viewer.open(state.activeDoc);
-      if (args.includes("--autorun-info") && state.activeDoc) {
-        await runPaletteCommand(["info", state.activeDoc, "--json"], { mutating: false, name: "info" });
-      }
-    } catch { /* 무시 */ }
+  } else {
+    // 편집기 모드인 경우 브라우저 인쇄(PDF 저장) 활용
+    window.print();
   }
 }
 
-boot();
+/* ══════════ 글자 수 카운터 동기화 ══════════ */
+function updateCharCount() {
+  const editor = $("sheet-editor");
+  const countEl = $("sb-char-count");
+  if (!editor || !countEl) return;
+  const text = editor.innerText || "";
+  const total = text.length;
+  const noSpace = text.replace(/\s/g, "").length;
+  countEl.textContent = `글자 ${total}자 (공백제외 ${noSpace}자)`;
+}
+
+/* ══════════ 서식 명령 실행 (execCommand) ══════════ */
+function formatDoc(cmd, val = null) {
+  document.execCommand(cmd, false, val);
+  const editor = $("sheet-editor");
+  if (editor) editor.focus();
+  updateCharCount();
+}
+
+/* ══════════ 초기화 ══════════ */
+async function init() {
+  mountIcons();
+
+  // 1. 뷰어 초기화
+  viewer = new Viewer({
+    getEngine: () => state.engine?.path,
+    onError: (err) => toast(err, "bad"),
+    onInfo: () => null,
+  });
+
+  // 2. 엔진 탐색
+  try {
+    const savedEngine = LS.get("enginePath", null);
+    const eng = await api.detectEngine(savedEngine);
+    state.engine = eng;
+    $("sb-engine-text").textContent = `${eng.version || "rhwp"} (정상 연결)`;
+    $("setting-engine").value = eng.path;
+  } catch (e) {
+    $("sb-engine-status").innerHTML = `<span class="dot dot-red"></span><span>엔진 없음</span>`;
+    $("firstrun").hidden = false;
+  }
+
+  // 3. 퀵 액세스 툴바 배선
+  $("qa-new")?.addEventListener("click", newDocument);
+  $("qa-open")?.addEventListener("click", promptOpenDocument);
+  $("qa-save")?.addEventListener("click", () => toast("문서가 저장되었습니다.", "ok"));
+  $("qa-pdf")?.addEventListener("click", exportPdf);
+  $("qa-undo")?.addEventListener("click", () => formatDoc("undo"));
+  $("qa-redo")?.addEventListener("click", () => formatDoc("redo"));
+  $("qa-print")?.addEventListener("click", () => window.print());
+
+  // 4. 메뉴바 배선
+  $("m-new")?.addEventListener("click", newDocument);
+  $("m-open")?.addEventListener("click", promptOpenDocument);
+  $("m-save")?.addEventListener("click", () => toast("저장 완료", "ok"));
+  $("m-export-pdf")?.addEventListener("click", exportPdf);
+  $("m-export-hwpx")?.addEventListener("click", async () => {
+    if (!state.activeDoc || !state.engine) return toast("변환할 문서가 없습니다.", "bad");
+    try {
+      await api.runTool(state.engine.path, ["export-hwpx", state.activeDoc, "--verify", "--json"], "menu");
+      toast("HWPX 변환 완료", "ok");
+    } catch (e) { toast(String(e), "bad"); }
+  });
+  $("m-export-hwp")?.addEventListener("click", async () => {
+    if (!state.activeDoc || !state.engine) return toast("변환할 문서가 없습니다.", "bad");
+    try {
+      await api.runTool(state.engine.path, ["convert", state.activeDoc, "--verify", "--json"], "menu");
+      toast("HWP 변환 완료", "ok");
+    } catch (e) { toast(String(e), "bad"); }
+  });
+  $("m-print")?.addEventListener("click", () => window.print());
+
+  $("m-undo")?.addEventListener("click", () => formatDoc("undo"));
+  $("m-redo")?.addEventListener("click", () => formatDoc("redo"));
+  $("m-cut")?.addEventListener("click", () => formatDoc("cut"));
+  $("m-copy")?.addEventListener("click", () => formatDoc("copy"));
+  $("m-paste")?.addEventListener("click", () => formatDoc("paste"));
+  $("m-select-all")?.addEventListener("click", () => formatDoc("selectAll"));
+
+  $("m-view-ruler")?.addEventListener("click", () => {
+    const ruler = $("ruler-bar");
+    if (ruler) ruler.hidden = !ruler.hidden;
+  });
+  $("m-view-sidebar")?.addEventListener("click", () => {
+    $("page-sidebar")?.classList.toggle("collapsed");
+  });
+  $("sidebar-close-btn")?.addEventListener("click", () => {
+    $("page-sidebar")?.classList.add("collapsed");
+  });
+
+  $("m-insert-table")?.addEventListener("click", () => insertTable(3, 3));
+  $("m-insert-hr")?.addEventListener("click", () => formatDoc("insertHorizontalRule"));
+  $("m-insert-date")?.addEventListener("click", () => {
+    const today = new Date().toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric" });
+    formatDoc("insertText", today);
+  });
+
+  $("m-tool-batch")?.addEventListener("click", () => { $("batch-modal").hidden = false; });
+  $("batch-close")?.addEventListener("click", () => { $("batch-modal").hidden = true; });
+  $("m-tool-settings")?.addEventListener("click", () => { $("settings").hidden = false; });
+  $("btn-settings")?.addEventListener("click", () => { $("settings").hidden = false; });
+  $("settings-close")?.addEventListener("click", () => { $("settings").hidden = true; });
+
+  // 5. 리본 서식 도구상자 배선
+  $("font-family-select")?.addEventListener("change", (e) => {
+    formatDoc("fontName", e.target.value);
+  });
+  $("font-size-select")?.addEventListener("change", (e) => {
+    const size = e.target.value;
+    // contenteditable 폰트 크기 직접 적용
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0);
+      const span = document.createElement("span");
+      span.style.fontSize = `${size}pt`;
+      try {
+        range.surroundContents(span);
+      } catch {
+        formatDoc("fontSize", "4");
+      }
+    }
+  });
+
+  $("tb-bold")?.addEventListener("click", () => formatDoc("bold"));
+  $("tb-italic")?.addEventListener("click", () => formatDoc("italic"));
+  $("tb-underline")?.addEventListener("click", () => formatDoc("underline"));
+  $("tb-strike")?.addEventListener("click", () => formatDoc("strikeThrough"));
+
+  $("text-color-picker")?.addEventListener("input", (e) => {
+    formatDoc("foreColor", e.target.value);
+  });
+  $("text-highlight-picker")?.addEventListener("input", (e) => {
+    formatDoc("hiliteColor", e.target.value);
+  });
+
+  $("tb-align-left")?.addEventListener("click", () => formatDoc("justifyLeft"));
+  $("tb-align-center")?.addEventListener("click", () => formatDoc("justifyCenter"));
+  $("tb-align-right")?.addEventListener("click", () => formatDoc("justifyRight"));
+  $("tb-align-justify")?.addEventListener("click", () => formatDoc("justifyFull"));
+  $("tb-list-bullet")?.addEventListener("click", () => formatDoc("insertUnorderedList"));
+  $("tb-list-num")?.addEventListener("click", () => formatDoc("insertOrderedList"));
+
+  $("tb-insert-table")?.addEventListener("click", () => insertTable(3, 3));
+  $("tb-insert-image")?.addEventListener("click", promptInsertImage);
+
+  // 모드 전환 탭
+  $("mode-viewer-btn")?.addEventListener("click", () => viewer.setMode("viewer"));
+  $("mode-editor-btn")?.addEventListener("click", () => viewer.setMode("editor"));
+
+  // 워터마크 버튼
+  $("wm-btn-open")?.addEventListener("click", promptOpenDocument);
+  $("wm-btn-new")?.addEventListener("click", newDocument);
+
+  // 6. 편집기 입력 감지
+  $("sheet-editor")?.addEventListener("input", updateCharCount);
+  $("sheet-editor")?.addEventListener("keyup", updateCursorPos);
+  $("sheet-editor")?.addEventListener("click", updateCursorPos);
+
+  // 7. 테마 전환
+  const savedTheme = LS.get("theme", "system");
+  applyTheme(savedTheme);
+  $("btn-theme")?.addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme") || "light";
+    const next = cur === "dark" ? "light" : "dark";
+    applyTheme(next);
+  });
+  $("setting-theme")?.addEventListener("change", (e) => applyTheme(e.target.value));
+
+  // 8. 드래그 앤 드롭 파일 열기
+  setupDragAndDrop();
+
+  // 9. 최근 문서 목록 렌더링
+  renderRecentDocs();
+
+  // 10. 시작 인자 파일이 있으면 열기
+  try {
+    const args = await api.startupArgs();
+    if (args && args.length) {
+      const target = args.find((a) => api.isDocPath(a));
+      if (target) await openDocument(target);
+    }
+  } catch {}
+}
+
+function updateCursorPos() {
+  // 줄/칸 계산
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  $("sb-cursor-pos").textContent = "1줄 1칸";
+}
+
+function insertTable(rows = 3, cols = 3) {
+  viewer.setMode("editor");
+  let html = `<table style="width:100%; border-collapse: collapse; margin: 12px 0;"><tbody>`;
+  for (let r = 0; r < rows; r++) {
+    html += "<tr>";
+    for (let c = 0; c < cols; c++) {
+      html += `<td style="border: 1px solid #475569; padding: 8px 12px; min-width: 60px;">&nbsp;</td>`;
+    }
+    html += "</tr>";
+  }
+  html += `</tbody></table><p><br></p>`;
+  formatDoc("insertHTML", html);
+}
+
+async function promptInsertImage() {
+  viewer.setMode("editor");
+  try {
+    const file = await api.pickAnyFile();
+    if (file) {
+      formatDoc("insertHTML", `<img src="${file}" style="max-width:100%; height:auto; margin: 10px 0;" alt="삽입된 그림"><p><br></p>`);
+    }
+  } catch (e) {
+    toast(`그림 삽입 실패: ${e}`, "bad");
+  }
+}
+
+function applyTheme(theme) {
+  if (theme === "system") {
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", prefersDark ? "dark" : "light");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+  LS.set("theme", theme);
+}
+
+function setupDragAndDrop() {
+  const veil = $("drop-veil");
+  window.addEventListener("dragenter", (e) => {
+    e.preventDefault();
+    if (veil) veil.hidden = false;
+  });
+  window.addEventListener("dragover", (e) => e.preventDefault());
+  window.addEventListener("dragleave", (e) => {
+    if (e.relatedTarget === null && veil) veil.hidden = true;
+  });
+  window.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    if (veil) veil.hidden = true;
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      const f = files[0];
+      if (api.isDocPath(f.name)) {
+        await openDocument(f.path || f.name);
+      } else {
+        toast("HWP 또는 HWPX 파일만 열 수 있습니다.", "bad");
+      }
+    }
+  });
+}
+
+window.addEventListener("DOMContentLoaded", init);

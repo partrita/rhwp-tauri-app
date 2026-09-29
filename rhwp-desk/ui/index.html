@@ -3,176 +3,339 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>rhwp-desk</title>
+<title>rhwp - 한글/워드 프로세서</title>
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
 <div id="app" class="app">
 
-  <!-- ══════════ 상단바 ══════════ -->
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" data-icon="logo"></span>
-      <span class="brand-name">rhwp-desk</span>
-      <span class="brand-tag">에이전트 워크벤치</span>
+  <!-- ══════════ 1. 창 헤더 / 타이틀바 ══════════ -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <span class="brand-mark" data-icon="logo"></span>
+        <span class="brand-name">rhwp</span>
+      </div>
+      <div class="quick-access">
+        <button id="qa-new" class="qa-btn" title="새 문서 (Ctrl+N)"><span data-icon="new"></span></button>
+        <button id="qa-open" class="qa-btn" title="문서 열기 (Ctrl+O)"><span data-icon="doc"></span></button>
+        <button id="qa-save" class="qa-btn" title="저장 (Ctrl+S)"><span data-icon="save"></span></button>
+        <button id="qa-pdf" class="qa-btn" title="PDF로 내보내기"><span data-icon="pdf"></span></button>
+        <span class="v-sep"></span>
+        <button id="qa-undo" class="qa-btn" title="실행 취소 (Ctrl+Z)"><span data-icon="undo"></span></button>
+        <button id="qa-redo" class="qa-btn" title="다시 실행 (Ctrl+Y)"><span data-icon="redo"></span></button>
+        <button id="qa-print" class="qa-btn" title="인쇄 (Ctrl+P)"><span data-icon="print"></span></button>
+      </div>
     </div>
-    <div class="topbar-center">
-      <button id="btn-palette" class="palette-hint" title="명령 팔레트 (Ctrl+K)">
-        <span data-icon="search"></span>
-        <span>명령 팔레트</span>
-        <kbd>Ctrl</kbd><kbd>K</kbd>
-      </button>
+    <div class="document-title" id="document-title">
+      <span class="title-text" id="doc-title-text">새 문서</span>
+      <span class="title-badge" id="doc-format-badge">HWPX</span>
     </div>
-    <div class="topbar-actions">
-      <button id="privacy-badge" class="mode-badge offline" title="Planner 연결 상태 — 클릭하면 설정">오프라인</button>
-      <span class="sep"></span>
-      <button id="btn-open" class="btn" title="문서 열기"><span data-icon="doc"></span>문서 열기</button>
-      <button id="btn-batch" class="btn" title="폴더의 문서 전체를 일괄 처리"><span data-icon="folder"></span>폴더 일괄</button>
-      <span class="sep"></span>
-      <button id="btn-viewer-toggle" class="btn icon-btn" title="문서 패널 열기/닫기"><span data-icon="panel"></span></button>
-      <button id="btn-theme" class="btn icon-btn" title="테마 전환"><span data-icon="moon"></span></button>
-      <button id="btn-settings" class="btn icon-btn" title="설정"><span data-icon="gear"></span></button>
+    <div class="header-right">
+      <button id="btn-theme" class="qa-btn" title="테마 전환"><span data-icon="moon"></span></button>
+      <button id="btn-settings" class="qa-btn" title="설정"><span data-icon="gear"></span></button>
     </div>
   </header>
 
-  <div class="body">
-
-    <!-- ══════════ 좌측: 관제 사이드바 ══════════ -->
-    <aside class="sidebar">
-      <section class="side-section" id="side-queue">
-        <h2><span data-icon="queue"></span>작업 큐</h2>
-        <div id="queue-list" class="queue-list">
-          <p class="empty-hint">대기 중인 작업이 없습니다</p>
-        </div>
-      </section>
-
-      <section class="side-section" id="side-docs">
-        <h2><span data-icon="doc"></span>문서</h2>
-        <div id="doc-list" class="doc-list">
-          <p class="empty-hint">문서를 끌어다 놓거나 [문서 열기]</p>
-        </div>
-      </section>
-
-      <section class="side-section grow" id="side-recent">
-        <h2><span data-icon="journal"></span>최근 문서</h2>
-        <div id="recent-list" class="recent-list"></div>
-      </section>
-
-      <footer class="engine-status" id="engine-status">
-        <span class="dot dot-gray"></span>
-        <div class="engine-meta">
-          <span id="engine-version">엔진 탐색 중…</span>
-          <span id="engine-path" class="engine-path"></span>
-        </div>
-      </footer>
-    </aside>
-
-    <!-- ══════════ 중앙: 카드 스트림 관제판 ══════════ -->
-    <main class="stream-pane">
-
-      <!-- 관제판 — 기본 화면. 문서를 여는 게 아니라 위임한 일의 현황을 본다. -->
-      <section id="fleet-dashboard" class="fleet-dashboard" hidden>
-        <div class="fleet-summary" id="fleet-summary">
-          <button class="fleet-stat" data-filter="all" title="전체 문서 보기">
-            <span class="fs-num" id="fs-total">0</span><span class="fs-label">관리 중 문서</span>
-          </button>
-          <button class="fleet-stat ok" data-filter="ok" title="검증 통과 문서만 보기">
-            <span class="fs-num" id="fs-ok">0</span><span class="fs-label">검증 통과</span>
-          </button>
-          <button class="fleet-stat bad" data-filter="attention" title="주의가 필요한 문서만 보기">
-            <span class="fs-num" id="fs-attention">0</span><span class="fs-label">주의 필요</span>
-          </button>
-          <button class="fleet-stat warn" data-filter="pending" title="승인 대기 중인 작업 보기">
-            <span class="fs-num" id="fs-pending">0</span><span class="fs-label">승인 대기</span>
-          </button>
-          <button class="fleet-stat" data-filter="none" title="">
-            <span class="fs-num" id="fs-done-today">0</span><span class="fs-label">오늘 완료한 작업</span>
-          </button>
-        </div>
-
-        <div class="fleet-body">
-          <section class="fleet-col">
-            <h3><span data-icon="alert"></span>주의가 필요한 문서</h3>
-            <div id="fleet-attention" class="fleet-list">
-              <p class="empty-hint">검증을 돌리면 발견된 문제가 여기 모입니다</p>
-            </div>
-          </section>
-          <section class="fleet-col">
-            <h3><span data-icon="check"></span>승인 대기</h3>
-            <div id="fleet-approvals" class="fleet-list">
-              <p class="empty-hint">문서를 바꾸는 작업은 실행 전 여기서 승인합니다</p>
-            </div>
-          </section>
-        </div>
-
-        <div class="fleet-cta">
-          <button id="fleet-add-folder" class="btn primary"><span data-icon="folder"></span>폴더 추가해 일괄 검증</button>
-          <span class="fleet-cta-hint">또는 이 창에 폴더를 끌어다 놓으세요</span>
-        </div>
-      </section>
-
-      <div id="doc-strip" class="doc-strip" hidden></div>
-
-      <div id="stream" class="stream">
-        <div id="stream-welcome" class="welcome">
-          <div class="welcome-mark" data-icon="logo-big"></div>
-          <h1>rhwp 에이전트 워크벤치</h1>
-          <p>문서를 여는 앱이 아니라 <strong>문서 일을 시키는</strong> 앱입니다.<br>
-             모든 도구 호출은 저널에 먼저 기록되고, 아래 카드는 그 저널의 1:1 렌더입니다.</p>
-          <ul class="welcome-actions">
-            <li><kbd>Ctrl</kbd>+<kbd>K</kbd> 명령 팔레트 — 엔진의 전 명령을 폼으로</li>
-            <li>문서/폴더를 이 창에 끌어다 놓기 — 열기·일괄 처리</li>
-            <li>문서 카드의 <em>검증</em> — 은닉 텍스트·주입·유니코드·워터마크·무기화 위협·레이아웃 이상 6축 스윕</li>
-          </ul>
-        </div>
+  <!-- ══════════ 2. 메인 메뉴바 ══════════ -->
+  <nav class="menu-bar">
+    <div class="menu-item" id="menu-file">
+      <button class="menu-trigger">파일(<u>F</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry" id="m-new"><span data-icon="new"></span><span>새 문서</span><kbd>Ctrl+N</kbd></div>
+        <div class="menu-entry" id="m-open"><span data-icon="doc"></span><span>문서 열기...</span><kbd>Ctrl+O</kbd></div>
+        <div class="menu-entry" id="m-save"><span data-icon="save"></span><span>저장</span><kbd>Ctrl+S</kbd></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-export-pdf"><span data-icon="pdf"></span><span>PDF로 내보내기...</span></div>
+        <div class="menu-entry" id="m-export-hwpx"><span data-icon="doc"></span><span>HWPX로 변환...</span></div>
+        <div class="menu-entry" id="m-export-hwp"><span data-icon="doc"></span><span>HWP로 변환...</span></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-print"><span data-icon="print"></span><span>인쇄...</span><kbd>Ctrl+P</kbd></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-close"><span>닫기</span></div>
       </div>
+    </div>
 
-      <div class="composer">
-        <span class="composer-state" id="composer-state">
-          <span class="dot dot-gray"></span><span id="composer-state-text">Planner 미연결</span>
-        </span>
-        <input id="composer-input" type="text"
-               placeholder="Planner 미연결 — 설정에서 모델을 연결하거나 Ctrl+K 명령 팔레트를 사용하세요">
-        <button id="body-toggle" class="btn small" title="도구 결과의 문서 본문을 모델에 보낼지 여부 — 기본 차단">
-          본문 전송: 차단
-        </button>
-        <button id="composer-send" class="btn" title="전송">
-          <span data-icon="send"></span>
-        </button>
+    <div class="menu-item" id="menu-edit">
+      <button class="menu-trigger">편집(<u>E</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry" id="m-undo"><span data-icon="undo"></span><span>실행 취소</span><kbd>Ctrl+Z</kbd></div>
+        <div class="menu-entry" id="m-redo"><span data-icon="redo"></span><span>다시 실행</span><kbd>Ctrl+Y</kbd></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-cut"><span>잘라내기</span><kbd>Ctrl+X</kbd></div>
+        <div class="menu-entry" id="m-copy"><span data-icon="copy"></span><span>복사</span><kbd>Ctrl+C</kbd></div>
+        <div class="menu-entry" id="m-paste"><span>붙여넣기</span><kbd>Ctrl+V</kbd></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-select-all"><span>모두 선택</span><kbd>Ctrl+A</kbd></div>
       </div>
-    </main>
+    </div>
 
-    <!-- ══════════ 우측: 보조 문서 패널 ══════════ -->
-    <aside class="viewer-pane" id="viewer-pane" hidden>
-      <header class="viewer-head">
-        <span id="viewer-title" class="viewer-title">문서</span>
-        <button id="viewer-close" class="btn icon-btn" title="닫기"><span data-icon="close"></span></button>
-      </header>
-      <div class="viewer-toolbar">
-        <button id="pg-prev" class="btn icon-btn" title="이전 쪽"><span data-icon="left"></span></button>
-        <span class="pg-indicator">
-          <input id="pg-input" type="number" min="1" value="1"> / <span id="pg-total">?</span>
-        </span>
-        <button id="pg-next" class="btn icon-btn" title="다음 쪽"><span data-icon="right"></span></button>
-        <span class="sep"></span>
-        <button id="zoom-out" class="btn icon-btn" title="축소"><span data-icon="minus"></span></button>
-        <span id="zoom-label" class="zoom-label">100%</span>
-        <button id="zoom-in" class="btn icon-btn" title="확대"><span data-icon="plus"></span></button>
-        <button id="zoom-fit" class="btn icon-btn" title="폭 맞춤"><span data-icon="fit"></span></button>
+    <div class="menu-item" id="menu-view">
+      <button class="menu-trigger">보기(<u>V</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry checkable checked" id="m-view-ruler"><span data-icon="check"></span><span>눈금자 표시</span></div>
+        <div class="menu-entry checkable checked" id="m-view-sidebar"><span data-icon="check"></span><span>쪽 탐색 패널</span><kbd>Ctrl+B</kbd></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-view-fit-width"><span data-icon="fit"></span><span>폭 맞춤</span></div>
+        <div class="menu-entry" id="m-view-fit-page"><span>쪽 맞춤</span></div>
+        <div class="menu-entry" id="m-view-100"><span>100% 크기</span></div>
       </div>
-      <div id="viewer-body" class="viewer-body">
-        <div id="svg-host" class="svg-host"></div>
+    </div>
+
+    <div class="menu-item" id="menu-insert">
+      <button class="menu-trigger">입력(<u>I</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry" id="m-insert-table"><span data-icon="table"></span><span>표 만들기 (3x3)</span><kbd>Ctrl+N, T</kbd></div>
+        <div class="menu-entry" id="m-insert-image"><span data-icon="image"></span><span>그림 삽입...</span><kbd>Ctrl+N, I</kbd></div>
+        <div class="menu-entry" id="m-insert-hr"><span>구분선 넣기</span></div>
+        <div class="menu-entry" id="m-insert-date"><span>오늘 날짜 넣기</span></div>
       </div>
-      <div id="viewer-info" class="viewer-info"></div>
-    </aside>
+    </div>
+
+    <div class="menu-item" id="menu-format">
+      <button class="menu-trigger">서식(<u>O</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry" id="m-fmt-bold"><span data-icon="bold"></span><span>굵게</span><kbd>Ctrl+B</kbd></div>
+        <div class="menu-entry" id="m-fmt-italic"><span data-icon="italic"></span><span>기울임</span><kbd>Ctrl+I</kbd></div>
+        <div class="menu-entry" id="m-fmt-underline"><span data-icon="underline"></span><span>밑줄</span><kbd>Ctrl+U</kbd></div>
+        <div class="menu-entry" id="m-fmt-strike"><span data-icon="strike"></span><span>취소선</span></div>
+      </div>
+    </div>
+
+    <div class="menu-item" id="menu-page">
+      <button class="menu-trigger">쪽(<u>P</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry" id="m-page-prev"><span data-icon="left"></span><span>이전 쪽</span><kbd>PageUp</kbd></div>
+        <div class="menu-entry" id="m-page-next"><span data-icon="right"></span><span>다음 쪽</span><kbd>PageDown</kbd></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-page-a4"><span>A4 용지 (210×297mm)</span></div>
+      </div>
+    </div>
+
+    <div class="menu-item" id="menu-tools">
+      <button class="menu-trigger">도구(<u>T</u>)</button>
+      <div class="menu-dropdown">
+        <div class="menu-entry" id="m-tool-verify"><span data-icon="shield"></span><span>문서 무결성 검증 (6축 스윕)</span></div>
+        <div class="menu-entry" id="m-tool-info"><span data-icon="info"></span><span>문서 메타데이터 정보</span></div>
+        <div class="menu-entry" id="m-tool-batch"><span data-icon="folder"></span><span>폴더 일괄 변환/검증...</span></div>
+        <div class="menu-divider"></div>
+        <div class="menu-entry" id="m-tool-palette"><span data-icon="search"></span><span>명령 팔레트</span><kbd>Ctrl+K</kbd></div>
+        <div class="menu-entry" id="m-tool-settings"><span data-icon="gear"></span><span>환경 설정...</span></div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ══════════ 3. 리본 서식 툴바 (Ribbon Formatting Toolbar) ══════════ -->
+  <div class="ribbon-bar">
+    <!-- 글꼴 및 글자 크기 -->
+    <div class="ribbon-group">
+      <select id="font-family-select" class="font-select" title="글꼴 선택">
+        <option value="'함초롬바탕', 'Batang', serif" selected>함초롬바탕</option>
+        <option value="'맑은 고딕', 'Malgun Gothic', sans-serif">맑은 고딕</option>
+        <option value="'나눔명조', 'Nanum Myeongjo', serif">나눔명조</option>
+        <option value="'나눔고딕', 'Nanum Gothic', sans-serif">나눔고딕</option>
+        <option value="'본고딕', 'Noto Sans KR', sans-serif">본고딕</option>
+        <option value="'Pretendard', sans-serif">Pretendard</option>
+        <option value="'Batang', '바탕', serif">바탕</option>
+        <option value="'Dotum', '돋움', sans-serif">돋움</option>
+        <option value="'Gulim', '굴림', sans-serif">굴림</option>
+        <option value="'Gungsuh', '궁서', serif">궁서</option>
+      </select>
+      <select id="font-size-select" class="size-select" title="글자 크기">
+        <option value="8">8 pt</option>
+        <option value="9">9 pt</option>
+        <option value="10" selected>10 pt</option>
+        <option value="11">11 pt</option>
+        <option value="12">12 pt</option>
+        <option value="14">14 pt</option>
+        <option value="16">16 pt</option>
+        <option value="18">18 pt</option>
+        <option value="20">20 pt</option>
+        <option value="24">24 pt</option>
+        <option value="32">32 pt</option>
+      </select>
+    </div>
+
+    <div class="ribbon-sep"></div>
+
+    <!-- 굵게, 기울임, 밑줄, 취소선, 글자색, 형광펜 -->
+    <div class="ribbon-group">
+      <button id="tb-bold" class="ribbon-btn" title="굵게 (Ctrl+B)"><span data-icon="bold"></span></button>
+      <button id="tb-italic" class="ribbon-btn" title="기울임 (Ctrl+I)"><span data-icon="italic"></span></button>
+      <button id="tb-underline" class="ribbon-btn" title="밑줄 (Ctrl+U)"><span data-icon="underline"></span></button>
+      <button id="tb-strike" class="ribbon-btn" title="취소선"><span data-icon="strike"></span></button>
+      <label class="color-btn" title="글자색">
+        <span class="color-icon">A</span>
+        <input type="color" id="text-color-picker" value="#000000">
+      </label>
+      <label class="color-btn" title="형광펜 / 배경색">
+        <span class="color-icon highlight-icon">H</span>
+        <input type="color" id="text-highlight-picker" value="#ffff00">
+      </label>
+    </div>
+
+    <div class="ribbon-sep"></div>
+
+    <!-- 정렬 및 목록 -->
+    <div class="ribbon-group">
+      <button id="tb-align-left" class="ribbon-btn" title="왼쪽 정렬"><span data-icon="align-left"></span></button>
+      <button id="tb-align-center" class="ribbon-btn" title="가운데 정렬"><span data-icon="align-center"></span></button>
+      <button id="tb-align-right" class="ribbon-btn" title="오른쪽 정렬"><span data-icon="align-right"></span></button>
+      <button id="tb-align-justify" class="ribbon-btn" title="양쪽 정렬"><span data-icon="align-justify"></span></button>
+      <button id="tb-list-bullet" class="ribbon-btn" title="글머리 기호"><span data-icon="list-bullet"></span></button>
+      <button id="tb-list-num" class="ribbon-btn" title="번호 매기기"><span data-icon="list-num"></span></button>
+    </div>
+
+    <div class="ribbon-sep"></div>
+
+    <!-- 입력 (표, 그림) -->
+    <div class="ribbon-group">
+      <button id="tb-insert-table" class="ribbon-btn text-btn" title="표 삽입 (3x3)"><span data-icon="table"></span><span>표</span></button>
+      <button id="tb-insert-image" class="ribbon-btn text-btn" title="그림 삽입"><span data-icon="image"></span><span>그림</span></button>
+    </div>
+
+    <!-- 쪽 네비게이션 및 모드 전환 -->
+    <div class="ribbon-group ribbon-right">
+      <div class="view-mode-toggle">
+        <button id="mode-viewer-btn" class="mode-tab active" title="HWP/HWPX 인쇄 페이지 뷰어"><span data-icon="eye"></span><span>문서 뷰</span></button>
+        <button id="mode-editor-btn" class="mode-tab" title="본문 워드 편집기"><span data-icon="edit"></span><span>편집기</span></button>
+      </div>
+      <div class="page-nav">
+        <button id="tb-prev-page" class="ribbon-btn icon-only" title="이전 쪽"><span data-icon="left"></span></button>
+        <span class="page-badge"><span id="tb-current-page">1</span> / <span id="tb-total-pages">1</span> 쪽</span>
+        <button id="tb-next-page" class="ribbon-btn icon-only" title="다음 쪽"><span data-icon="right"></span></button>
+      </div>
+    </div>
   </div>
 
-  <!-- ══════════ 명령 팔레트 ══════════ -->
+  <!-- ══════════ 4. 가로 눈금자 (Horizontal Ruler) ══════════ -->
+  <div class="ruler-bar" id="ruler-bar">
+    <div class="ruler-corner"></div>
+    <div class="ruler-body" id="ruler-body">
+      <div class="ruler-ticks" id="ruler-ticks"></div>
+      <div class="ruler-margin-marker left" id="ruler-margin-left" title="왼쪽 여백 (20mm)"></div>
+      <div class="ruler-margin-marker right" id="ruler-margin-right" title="오른쪽 여백 (20mm)"></div>
+    </div>
+  </div>
+
+  <!-- ══════════ 5. 본문 작업 공간: 좌측 패널 + 중앙 A4 캔버스 ══════════ -->
+  <div class="workspace-body">
+    <!-- 좌측 쪽 썸네일 & 탐색 패널 -->
+    <aside class="page-sidebar" id="page-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title"><span data-icon="panel"></span><span>쪽 탐색</span></span>
+        <button id="sidebar-close-btn" class="qa-btn" title="사이드바 닫기"><span data-icon="close"></span></button>
+      </div>
+      <div class="thumbnail-list" id="thumbnail-list">
+        <div class="thumb-item active" data-page="1">
+          <div class="thumb-sheet">1</div>
+          <span class="thumb-label">1 쪽</span>
+        </div>
+      </div>
+      <div class="sidebar-recent">
+        <div class="recent-header"><span data-icon="journal"></span><span>최근 문서</span></div>
+        <div class="recent-docs-list" id="recent-docs-list"></div>
+      </div>
+    </aside>
+
+    <!-- 중앙 A4 작업대 -->
+    <main class="page-canvas" id="page-canvas">
+      <!-- 줌 래퍼 -->
+      <div class="sheet-zoom-wrapper" id="sheet-zoom-wrapper">
+        <!-- A4 시트 (210mm x 297mm) -->
+        <div class="a4-sheet" id="a4-sheet">
+          <!-- 한글 고유의 네 모서리 여백 안내선 (Crop marks) -->
+          <div class="corner-mark top-left"></div>
+          <div class="corner-mark top-right"></div>
+          <div class="corner-mark bottom-left"></div>
+          <div class="corner-mark bottom-right"></div>
+
+          <!-- 1) SVG 고해상도 벡터 뷰어 컨테이너 (HWP/HWPX 열었을 때) -->
+          <div class="sheet-svg-host" id="sheet-svg-host"></div>
+
+          <!-- 2) 워드프로세서 편집기 본문 (신규 작성 및 서식 편집) -->
+          <div class="sheet-editor" id="sheet-editor" contenteditable="true" spellcheck="false" hidden>
+            <h1 style="text-align: center; margin-bottom: 24px; font-size: 22pt; font-weight: bold; font-family: '함초롬바탕', serif;">제목을 입력하세요</h1>
+            <p style="line-height: 1.6; margin-bottom: 14px; font-size: 10pt;">여기에 본문 내용을 작성하십시오. 상단의 서식 툴바를 이용해 글꼴, 크기, 정렬, 굵게, 표, 그림 등을 자유롭게 편집할 수 있습니다.</p>
+          </div>
+
+          <!-- 빈 문서 안내 워터마크 -->
+          <div class="welcome-watermark" id="welcome-watermark">
+            <div class="wm-icon" data-icon="logo-big"></div>
+            <h2>rhwp 한글 / 워드 프로세서</h2>
+            <p>HWP · HWPX 문서를 열거나 새 문서를 작성할 수 있습니다.</p>
+            <div class="wm-actions">
+              <button id="wm-btn-open" class="wm-btn primary"><span data-icon="doc"></span>문서 열기 (Ctrl+O)</button>
+              <button id="wm-btn-new" class="wm-btn"><span data-icon="edit"></span>새 문서 작성 (Ctrl+N)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ══════════ 6. 하단 상태바 (Status Bar) ══════════ -->
+  <footer class="status-bar">
+    <div class="status-left">
+      <span class="status-item"><strong id="sb-page-info">1 / 1 쪽</strong></span>
+      <span class="status-sep">|</span>
+      <span class="status-item">1 구역</span>
+      <span class="status-sep">|</span>
+      <span class="status-item" id="sb-char-count">글자 0자</span>
+      <span class="status-sep">|</span>
+      <span class="status-item" id="sb-paper-size">A4 (210 × 297mm) 세로</span>
+      <span class="status-sep">|</span>
+      <span class="status-item" id="sb-cursor-pos">1줄 1칸</span>
+    </div>
+    <div class="status-right">
+      <span class="status-item engine-badge" id="sb-engine-status">
+        <span class="dot dot-green"></span>
+        <span id="sb-engine-text">rhwp 정상 연결</span>
+      </span>
+      <span class="status-sep">|</span>
+      <button id="sb-zoom-fit-width" class="status-btn" title="폭 맞춤"><span data-icon="fit"></span></button>
+      <button id="sb-zoom-out" class="status-btn" title="축소"><span data-icon="minus"></span></button>
+      <input type="range" id="sb-zoom-slider" min="50" max="200" value="100" class="zoom-slider">
+      <span id="sb-zoom-val" class="zoom-val">100%</span>
+      <button id="sb-zoom-in" class="status-btn" title="확대"><span data-icon="plus"></span></button>
+    </div>
+  </footer>
+
+  <!-- ══════════ 모달: 환경 설정 ══════════ -->
+  <div id="settings" class="overlay" hidden>
+    <div class="modal">
+      <header><h2>환경 설정</h2>
+        <button id="settings-close" class="qa-btn"><span data-icon="close"></span></button>
+      </header>
+      <div class="modal-body">
+        <label class="field">
+          <span class="field-label">rhwp 엔진 경로</span>
+          <span class="field-help">비워 두면 자동 탐색 — PATH·저장소 target 순. 환경변수 RHWP_DESK_ENGINE 지원.</span>
+          <div class="field-row">
+            <input id="setting-engine" type="text" placeholder="C:\…\rhwp.exe (비우면 자동 탐색)">
+            <button id="setting-engine-apply" class="qa-btn primary">적용</button>
+          </div>
+        </label>
+        <div class="field">
+          <span class="field-label">화면 테마</span>
+          <div class="field-row">
+            <select id="setting-theme">
+              <option value="system">시스템 설정 따름</option>
+              <option value="light">라이트 (오피스 밝은 테마)</option>
+              <option value="dark">다크 테마</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════ 모달: 명령 팔레트 (Ctrl+K) ══════════ -->
   <div id="palette" class="overlay" hidden>
     <div class="palette">
       <div class="palette-search">
         <span data-icon="search"></span>
-        <input id="palette-input" type="text" placeholder="명령 검색 — capabilities에서 자동 생성됨">
+        <input id="palette-input" type="text" placeholder="명령 검색 — capabilities 명령 실행">
         <span id="palette-count" class="palette-count"></span>
       </div>
       <div id="palette-list" class="palette-list"></div>
@@ -181,135 +344,58 @@
         <span><kbd>↑</kbd><kbd>↓</kbd> 이동</span>
         <span><kbd>Enter</kbd> 선택</span>
         <span><kbd>Esc</kbd> 닫기</span>
-        <span class="palette-src" id="palette-src"></span>
       </footer>
     </div>
   </div>
 
-  <!-- ══════════ 설정 ══════════ -->
-  <div id="settings" class="overlay" hidden>
-    <div class="modal">
-      <header><h2>설정</h2>
-        <button id="settings-close" class="btn icon-btn"><span data-icon="close"></span></button>
-      </header>
-      <div class="modal-body">
-        <label class="field">
-          <span class="field-label">rhwp 엔진 경로</span>
-          <span class="field-help">비워 두면 자동 탐색 — PATH·저장소 target 순. 환경변수 RHWP_DESK_ENGINE 도 지원.</span>
-          <div class="field-row">
-            <input id="setting-engine" type="text" placeholder="C:\…\rhwp.exe (비우면 자동 탐색)">
-            <button id="setting-engine-apply" class="btn primary">적용</button>
-          </div>
-        </label>
-        <div class="field">
-          <span class="field-label">테마</span>
-          <div class="field-row">
-            <select id="setting-theme">
-              <option value="system">시스템 따름</option>
-              <option value="light">라이트</option>
-              <option value="dark">다크</option>
-            </select>
-          </div>
-        </div>
-        <hr class="modal-sep">
-        <div class="field">
-          <span class="field-label">모델 연결 (Planner)</span>
-          <span class="field-help">
-            OpenAI 호환 <code>/v1/chat/completions</code> 규격 하나로 로컬 서버·사내 게이트웨이·클라우드를 연결합니다.
-            LLM은 계획만 세우고, 실행·검증·기록은 전부 rhwp 결정론 도구가 합니다.
-            API 키는 <strong>Windows 자격 증명 관리자</strong>에 저장됩니다 — 평문 파일에 쓰지 않습니다.
-          </span>
-          <div id="llm-probe-area"></div>
-          <div id="llm-profiles" class="llm-profiles"></div>
-          <details id="llm-add" class="llm-add">
-            <summary class="btn small">+ 엔드포인트 추가</summary>
-            <div class="llm-add-form">
-              <div class="field-row"><input id="llm-name" type="text" placeholder="표시 이름 (예: 로컬 7B)"></div>
-              <div class="field-row">
-                <input id="llm-base" type="text" placeholder="Base URL (예: http://127.0.0.1:11434)">
-                <button id="llm-fetch-models" class="btn" title="이 서버의 모델 목록 불러오기">모델 목록</button>
-              </div>
-              <div class="field-row">
-                <input id="llm-model" type="text" placeholder="모델명" list="llm-model-list">
-                <datalist id="llm-model-list"></datalist>
-              </div>
-              <div class="field-row">
-                <input id="llm-key" type="password" placeholder="API 키 (없으면 비움)">
-              </div>
-              <label class="flag-row" style="margin-top:2px">
-                <input id="llm-key-session" type="checkbox">
-                <span>키를 저장하지 않고 이 세션에만 유지</span>
-              </label>
-              <div class="field-row" style="margin-top:8px">
-                <button id="llm-test" class="btn">연결 테스트</button>
-                <button id="llm-save" class="btn primary">프로필 저장</button>
-              </div>
-              <p id="llm-test-result" class="field-help" style="margin-top:6px"></p>
-            </div>
-          </details>
-        </div>
-        <hr class="modal-sep">
-        <div class="field">
-          <span class="field-label">작업 저널</span>
-          <span class="field-help">모든 도구 호출은 NDJSON 저널에 먼저 기록됩니다 (journal-first).</span>
-          <code id="setting-journal-path" class="path-code">—</code>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ══════════ 첫 실행 / 엔진 없음 ══════════ -->
-  <div id="firstrun" class="overlay" hidden>
-    <div class="modal">
-      <header><h2>rhwp 엔진을 찾지 못했습니다</h2></header>
-      <div class="modal-body">
-        <p>rhwp-desk 는 <code>rhwp.exe</code>(문서 엔진)를 서브프로세스로 부르는 워크벤치입니다.<br>
-           다음 순서로 자동 탐색했지만 실패했습니다:</p>
-        <ol class="firstrun-list">
-          <li>설정에 지정한 경로</li>
-          <li>환경변수 <code>RHWP_DESK_ENGINE</code></li>
-          <li><code>PATH</code></li>
-          <li>저장소 관례 위치 (<code>target/debug</code>·<code>target/release</code> 등)</li>
-        </ol>
-        <label class="field">
-          <span class="field-label">rhwp.exe 경로를 직접 지정</span>
-          <div class="field-row">
-            <input id="firstrun-engine" type="text" placeholder="C:\…\rhwp.exe">
-            <button id="firstrun-apply" class="btn primary">확인</button>
-          </div>
-        </label>
-        <button id="firstrun-retry" class="btn">다시 탐색</button>
-        <p id="firstrun-error" class="error-text"></p>
-      </div>
-    </div>
-  </div>
-
-  <!-- 배치 모드 선택 -->
+  <!-- ══════════ 모달: 폴더 일괄 처리 ══════════ -->
   <div id="batch-modal" class="overlay" hidden>
     <div class="modal">
       <header><h2>폴더 일괄 처리</h2>
-        <button id="batch-close" class="btn icon-btn"><span data-icon="close"></span></button>
+        <button id="batch-close" class="qa-btn"><span data-icon="close"></span></button>
       </header>
       <div class="modal-body">
         <p id="batch-summary" class="field-help"></p>
         <div class="batch-modes">
           <button class="batch-mode btn" data-mode="info"><strong>메타 스윕</strong><span>문서마다 info --json</span></button>
-          <button class="batch-mode btn" data-mode="verify"><strong>검증 스윕</strong><span>은닉 텍스트·주입·유니코드·워터마크·무기화 위협·레이아웃 이상 6축</span></button>
+          <button class="batch-mode btn" data-mode="verify"><strong>검증 스윕</strong><span>은닉 텍스트·주입·유니코드·무기화 6축</span></button>
           <button class="batch-mode btn" data-mode="pdf"><strong>PDF 변환</strong><span>문서마다 export-pdf</span></button>
-          <button class="batch-mode btn" data-mode="hwpx"><strong>HWPX 변환</strong><span>문서마다 export-hwpx --verify</span></button>
-          <button class="batch-mode btn" data-mode="hwp"><strong>HWP 변환</strong><span>문서마다 convert --verify</span></button>
+          <button class="batch-mode btn" data-mode="hwpx"><strong>HWPX 변환</strong><span>문서마다 export-hwpx</span></button>
+          <button class="batch-mode btn" data-mode="hwp"><strong>HWP 변환</strong><span>문서마다 convert</span></button>
         </div>
       </div>
     </div>
   </div>
 
-  <div id="drop-veil" class="drop-veil" hidden>
-    <div class="drop-veil-inner">
-      <span data-icon="drop"></span>
-      <p>놓으면 엽니다 — 문서(.hwp/.hwpx)는 열기, 폴더는 일괄 처리</p>
+  <!-- ══════════ 모달: 엔진 탐색 실패 ══════════ -->
+  <div id="firstrun" class="overlay" hidden>
+    <div class="modal">
+      <header><h2>rhwp 엔진을 찾지 못했습니다</h2></header>
+      <div class="modal-body">
+        <p>rhwp-desk 는 <code>rhwp.exe</code>(문서 엔진)를 통해 HWP/HWPX를 렌더링하고 변환합니다.<br>
+           설정 경로, 환경변수 <code>RHWP_DESK_ENGINE</code>, 또는 <code>PATH</code>를 확인하십시오.</p>
+        <label class="field">
+          <span class="field-label">rhwp.exe 경로 직접 지정</span>
+          <div class="field-row">
+            <input id="firstrun-engine" type="text" placeholder="C:\…\rhwp.exe">
+            <button id="firstrun-apply" class="qa-btn primary">확인</button>
+          </div>
+        </label>
+        <button id="firstrun-retry" class="qa-btn">다시 탐색</button>
+        <p id="firstrun-error" class="error-text"></p>
+      </div>
     </div>
   </div>
 
+  <!-- 드래그 & 드롭 오버레이 -->
+  <div id="drop-veil" class="drop-veil" hidden>
+    <div class="drop-veil-inner">
+      <span data-icon="drop"></span>
+      <p>문서(.hwp / .hwpx)를 놓으면 열립니다</p>
+    </div>
+  </div>
+
+  <!-- 알림 토스트 -->
   <div id="toasts" class="toasts"></div>
 </div>
 
