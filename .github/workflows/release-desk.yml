@@ -144,7 +144,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $tag = "${{ steps.version.outputs.tag }}"
-          $nsis = Get-ChildItem "rhwp-desk/target/${{ matrix.target }}/release/bundle/nsis/*.exe" | Select-Object -First 1
+          $nsis = Get-ChildItem -Path "rhwp-desk/target" -Filter "*.exe" -Recurse | Where-Object { $_.FullName -like "*nsis*" -or $_.FullName -like "*setup*" } | Select-Object -First 1
           if ($nsis) {
             $dest = "dist/rhwp-desk-$tag-windows-x86_64-setup.exe"
             Copy-Item $nsis.FullName $dest
@@ -159,7 +159,7 @@ jobs:
         run: |
           mkdir -p dist
           TAG="${{ steps.version.outputs.tag }}"
-          DMG=$(ls rhwp-desk/target/${{ matrix.target }}/release/bundle/dmg/*.dmg 2>/dev/null | head -n 1)
+          DMG=$(find rhwp-desk/target -name "*.dmg" 2>/dev/null | head -n 1)
           if [ -n "$DMG" ]; then
             DEST="dist/rhwp-desk-${TAG}-macos-${{ matrix.arch }}.dmg"
             cp "$DMG" "$DEST"
@@ -174,8 +174,8 @@ jobs:
         run: |
           mkdir -p dist
           TAG="${{ steps.version.outputs.tag }}"
-          APPIMAGE=$(ls rhwp-desk/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage 2>/dev/null | head -n 1)
-          DEB=$(ls rhwp-desk/target/${{ matrix.target }}/release/bundle/deb/*.deb 2>/dev/null | head -n 1)
+          APPIMAGE=$(find rhwp-desk/target -name "*.AppImage" 2>/dev/null | head -n 1)
+          DEB=$(find rhwp-desk/target -name "*.deb" 2>/dev/null | head -n 1)
           if [ -n "$APPIMAGE" ]; then
             DEST_AI="dist/rhwp-desk-${TAG}-linux-x86_64.AppImage"
             cp "$APPIMAGE" "$DEST_AI"

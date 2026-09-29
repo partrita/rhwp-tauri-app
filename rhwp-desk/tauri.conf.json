@@ -48,7 +48,7 @@
         "bundleMediaFramework": false
       }
     },
-    "macos": {
+    "macOS": {
       "minimumSystemVersion": "10.15"
     },
     "icon": [

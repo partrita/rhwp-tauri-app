@@ -16,7 +16,10 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = app.path().app_data_dir().unwrap_or_else(|_| {
+                std::env::temp_dir().join("rhwp-desk")
+            });
+            let _ = std::fs::create_dir_all(&data_dir);
             app.manage(commands::AppState { data_dir });
             Ok(())
         })
