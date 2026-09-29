@@ -90,7 +90,23 @@ jobs:
           restore-keys: |
             ${{ matrix.target }}-desk-
 
-      - name: Install cargo-binstall
+      - name: Install cargo-binstall (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $url = "https://github.com/cargo-bins/cargo-binstall/releases/latest/download/cargo-binstall-x86_64-pc-windows-msvc.zip"
+            Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\cargo-binstall.zip" -UseBasicParsing
+            Expand-Archive -Path "$env:TEMP\cargo-binstall.zip" -DestinationPath "$env:USERPROFILE\.cargo\bin" -Force
+            cargo binstall --version
+          } catch {
+            Write-Host "Direct download failed, falling back to cargo install..."
+            cargo install cargo-binstall --locked
+          }
+
+      - name: Install cargo-binstall (Linux/macOS)
+        if: matrix.os != 'windows'
         uses: cargo-bins/cargo-binstall@v1.10.2
 
       - name: Install Tauri CLI
